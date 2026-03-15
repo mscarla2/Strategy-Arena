@@ -508,8 +508,8 @@ class GPEvolutionArena:
         
         # Adaptive mutation rate based on diversity
         adaptive_mutation_prob = self.mutation_prob
-        if diversity_ratio < 0.3:  # Less than 30% unique
-            adaptive_mutation_prob = min(0.6, self.mutation_prob * 3)  # Triple mutation rate
+        if diversity_ratio < 0.5:  # Less than 50% unique - more aggressive
+            adaptive_mutation_prob = min(0.7, self.mutation_prob * 4)  # Quadruple mutation rate
             print_status(f"Low diversity ({diversity_ratio:.1%}), increasing mutation to {adaptive_mutation_prob:.1%}", "warning")
         
         # Generate rest with diversity check
@@ -520,9 +520,15 @@ class GPEvolutionArena:
             attempts += 1
             r = random.random()
 
-            # Adjust probabilities based on diversity
-            crossover_threshold = self.crossover_prob if diversity_ratio > 0.3 else self.crossover_prob * 0.5
-            mutation_threshold = crossover_threshold + adaptive_mutation_prob
+            # Adjust probabilities based on diversity - favor mutation and new random when low
+            if diversity_ratio < 0.3:
+                # Low diversity: prioritize mutation and random injection
+                crossover_threshold = 0.2  # Reduce crossover
+                mutation_threshold = crossover_threshold + 0.5  # Increase mutation
+                # Remaining 30% will be random or reproduction
+            else:
+                crossover_threshold = self.crossover_prob
+                mutation_threshold = crossover_threshold + adaptive_mutation_prob
 
             if r < crossover_threshold:
                 parent1 = self.tournament_select()
@@ -533,7 +539,7 @@ class GPEvolutionArena:
                 child = self.operators.mutate(parent)
             else:
                 # When diversity is low, prefer creating new random strategies
-                if diversity_ratio < 0.2:
+                if diversity_ratio < 0.4:  # Increased threshold
                     depth = random.randint(2, self.max_depth)
                     tree = self.generator.random_tree(max_depth=depth, method="grow")
                     child = GPStrategy(
@@ -556,11 +562,15 @@ class GPEvolutionArena:
             # Only check duplicates within this generation, not globally
             if formula in seen_formulas:
                 # If we're stuck with duplicates and diversity is low, force a mutation
-                if diversity_ratio < 0.3 and attempts > max_attempts * 0.5:
+                if diversity_ratio < 0.5 and attempts > max_attempts * 0.3:  # More aggressive
                     child = self.operators.mutate(child)
                     formula = child.get_formula()
                     if formula in seen_formulas:
-                        continue
+                        # Try one more time with a different mutation
+                        child = self.operators.mutate(child)
+                        formula = child.get_formula()
+                        if formula in seen_formulas:
+                            continue
                 else:
                     continue
                 
@@ -658,13 +668,15 @@ class GPEvolutionArena:
 
     def should_early_stop(self) -> bool:
         """Check early stopping conditions."""
-        if self.stagnant_generations >= 10:
+        # More lenient early stopping - allow more time for evolution
+        if self.stagnant_generations >= 15:  # Increased from 10
             return True
-        if len(self.generation_history) < 10:
+        if len(self.generation_history) < 15:  # Need more history
             return False
         
-        recent_best = [h['max_fitness'] for h in self.generation_history[-10:]]
-        if max(recent_best[-5:]) <= max(recent_best[:5]) + 0.01:
+        # Check if fitness is improving at all
+        recent_best = [h['max_fitness'] for h in self.generation_history[-15:]]
+        if max(recent_best[-5:]) <= max(recent_best[:10]) + 0.02:  # More lenient threshold
             return True
         
         return False

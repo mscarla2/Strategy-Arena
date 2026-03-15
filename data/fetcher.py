@@ -204,9 +204,9 @@ class DataFetcher:
                 # Find tickers available in cache
                 available = [t for t in tickers if t in master.columns]
                 
-                if (len(available) >= MIN_TICKERS_REQUIRED and 
-                    cache_start <= start_dt and 
-                    cache_end >= end_dt - pd.Timedelta(days=5)):  # Allow 5 day buffer
+                if (len(available) >= MIN_TICKERS_REQUIRED and
+                    cache_start <= start_dt and
+                    cache_end >= end_dt - pd.Timedelta(days=7)):  # Allow 7 day buffer for weekends
                     
                     # Use cached data
                     df = master.loc[start_dt:end_dt, available].copy()

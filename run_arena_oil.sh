@@ -10,10 +10,10 @@ echo "╚═══════════════════════�
 echo ""
 echo "🛢️  Oil Stocks Configuration:"
 echo "  Universe: oil (EONR, TPET, USEG, STAK, PRSO, BATL, USO, BNO)"
-echo "  Date Range: 2023-01-01 to present"
+echo "  Date Range: 2025-01-01 to present (March 17, 2026)"
 echo "  Population: 50"
 echo "  Generations: 30"
-echo "  Timeframe: weekly"
+echo "  Timeframe: swing"
 echo ""
 echo "🎯 Oil-Specific Features:"
 echo "  ✓ WTI/Brent Correlation & Beta"
@@ -51,13 +51,13 @@ echo ""
 
 python3 arena_runner_v3.py \
     --universe oil \
-    --start 2023-01-01 \
+    --start 2018-01-01 \
     --population 50 \
     --generations 30 \
-    --timeframe weekly \
-    --train-months 12 \
-    --test-months 3 \
-    --step-months 3 \
+    --timeframe swing \
+    --train-months 3 \
+    --test-months 2 \
+    --step-months 1 \
     --enable-oil \
     --enable-smc \
     --enable-sr \
