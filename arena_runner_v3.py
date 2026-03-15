@@ -261,7 +261,12 @@ class GPEvolutionArena:
         self.elite_count = elite_count
         self.parsimony_coefficient = parsimony_coefficient
 
-        self.tickers = tickers if tickers else get_universe_for_period(start_date)
+        # Handle special universe keywords
+        if tickers and len(tickers) == 1 and tickers[0] == 'oil':
+            from data.universe import get_oil_universe
+            self.tickers = get_oil_universe()
+        else:
+            self.tickers = tickers if tickers else get_universe_for_period(start_date)
         self.data_fetcher = DataFetcher()
 
         self.feature_lib = FeatureLibrary()

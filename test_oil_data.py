@@ -26,11 +26,11 @@ def test_oil_data():
     print(f"📅 Date range: {start_date} to {end_date}")
     print()
     
-    fetcher = DataFetcher(tickers, start_date, end_date)
+    fetcher = DataFetcher()
     
     # Fetch data
     print("⏳ Fetching data from yfinance...")
-    prices = fetcher.get_prices()
+    prices = fetcher.fetch(start_date, end_date, tickers, use_cache=False)
     print()
     
     # Analyze results

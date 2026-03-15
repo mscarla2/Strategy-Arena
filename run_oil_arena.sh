@@ -15,8 +15,8 @@ echo ""
 python arena_runner_v3.py \
     --tickers oil \
     --start 2025-01-01 \
-    --population 20 \
-    --generations 5 \
+    --population 30 \
+    --generations 15 \
     --train-months 6 \
     --test-months 2 \
     --step-months 1
@@ -26,5 +26,5 @@ echo "✅ Oil arena run complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Check results in data/gp_strategies.db"
-echo "  2. Run dashboard: python -m ui.dashboard"
+echo "  2. Run dashboard: streamlit -m ui.dashboard"
 echo "  3. For full run, increase --population to 100 and --generations to 20+"
