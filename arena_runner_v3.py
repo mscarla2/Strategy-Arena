@@ -248,6 +248,12 @@ class GPEvolutionArena:
         elite_count: int = 2,
         parsimony_coefficient: float = 0.001,
         initial_capital: float = None,
+        timeframe: str = 'weekly',
+        # Priority 1 & 2 parameters
+        rebalance_threshold: float = 0.20,
+        use_stops: bool = False,
+        use_kelly: bool = False,
+        use_calmar_fitness: bool = False,
     ):
         self.start_date = start_date
         self.end_date = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -260,6 +266,19 @@ class GPEvolutionArena:
         self.mutation_prob = mutation_prob
         self.elite_count = elite_count
         self.parsimony_coefficient = parsimony_coefficient
+        
+        # Multi-timeframe support
+        self.timeframe = timeframe
+        self._setup_timeframe_config()
+        
+        # Priority 1 & 2 features
+        self.rebalance_threshold = rebalance_threshold
+        self.use_stops = use_stops
+        self.use_kelly = use_kelly
+        self.use_calmar_fitness = use_calmar_fitness
+        
+        # Initialize new components
+        self._init_priority_components()
 
         # Handle special universe keywords
         if tickers and len(tickers) == 1 and tickers[0] == 'oil':
@@ -286,6 +305,59 @@ class GPEvolutionArena:
         self.prices: Optional[pd.DataFrame] = None
         self.periods: List[Tuple[str, str, str, str]] = []
         self.benchmark_results: List[Dict] = []
+    
+    def _init_priority_components(self):
+        """Initialize Priority 1 & 2 components."""
+        from backtest.rebalancing import PartialRebalancer
+        from backtest.stops import TrailingVolatilityStop
+        from backtest.position_sizing import CombinedPositionSizer
+        
+        # Partial rebalancing (Priority 1.1)
+        self.rebalancer = PartialRebalancer(deviation_threshold=self.rebalance_threshold)
+        
+        # Trailing stops (Priority 2.1)
+        self.stop_manager = TrailingVolatilityStop(atr_multiplier=2.0, lookback=14) if self.use_stops else None
+        
+        # Kelly + Volatility position sizing (Priority 2.2 & 2.3)
+        self.position_sizer = CombinedPositionSizer(
+            kelly_lookback=20,
+            kelly_max=0.25,
+            vol_lookback=20,
+            target_vol=0.15
+        ) if self.use_kelly else None
+    
+    def _setup_timeframe_config(self):
+        """Setup timeframe-specific configuration."""
+        from backtest.multi_timeframe import Timeframe, TIMEFRAME_CONFIGS
+        
+        timeframe_map = {
+            'intraday': Timeframe.INTRADAY,
+            'swing': Timeframe.SWING,
+            'weekly': Timeframe.WEEKLY,
+            'monthly': Timeframe.MONTHLY
+        }
+        
+        self.timeframe_enum = timeframe_map.get(self.timeframe, Timeframe.WEEKLY)
+        self.timeframe_config = TIMEFRAME_CONFIGS[self.timeframe_enum]
+        
+        # Initialize risk management components
+        from backtest.risk_management import MicrocapSlippageModel, DilutionFilter, LiquidityConstraint
+        
+        self.slippage_model = MicrocapSlippageModel(
+            base_slippage_bps=self.timeframe_config.base_slippage_bps,
+            volume_impact_factor=0.5,
+            commission_per_trade=self.timeframe_config.commission_per_trade
+        )
+        
+        self.dilution_filter = DilutionFilter(
+            volume_spike_threshold=5.0,
+            price_drop_threshold=-0.10
+        )
+        
+        self.liquidity_constraint = LiquidityConstraint(
+            max_pct_adv=0.05,
+            min_adv_dollars=50000
+        )
 
     def _generate_walk_forward_periods(
         self,
@@ -363,6 +435,11 @@ class GPEvolutionArena:
             benchmark_results=self.benchmark_results,
             transaction_cost=0.002,
             rebalance_frequency=21,
+            # Pass Priority 1 & 2 components
+            rebalancer=self.rebalancer,
+            stop_manager=self.stop_manager,
+            position_sizer=self.position_sizer,
+            use_calmar_fitness=self.use_calmar_fitness,
         )
         
         results = {}
@@ -718,11 +795,52 @@ def main():
     parser.add_argument('--train-months', type=int, default=12)
     parser.add_argument('--test-months', type=int, default=3)
     parser.add_argument('--step-months', type=int, default=3)
+    parser.add_argument('--timeframe', type=str, default='weekly',
+                       choices=['intraday', 'swing', 'weekly', 'monthly'],
+                       help='Trading timeframe (default: weekly, recommended for microcaps)')
+    parser.add_argument('--universe', type=str, default=None,
+                       help='Universe keyword (e.g., "oil" for oil stocks)')
+    
+    # Priority 1 & 2 parameters
+    parser.add_argument('--rebalance-threshold', type=float, default=0.20,
+                       help='Partial rebalancing deviation threshold (default: 0.20 = 20%%)')
+    parser.add_argument('--use-stops', action='store_true',
+                       help='Enable trailing volatility stops (ATR-based)')
+    parser.add_argument('--use-kelly', action='store_true',
+                       help='Enable Kelly Criterion + volatility position sizing')
+    parser.add_argument('--use-calmar-fitness', action='store_true',
+                       help='Use Calmar Ratio fitness instead of Sharpe-based')
 
     args = parser.parse_args()
+    
+    # Print timeframe info
+    if args.timeframe:
+        print_section("Trading Timeframe Configuration", "⏱")
+        timeframe_info = {
+            'intraday': ('5-min candles, 6-hour holds', '75 bps', '1512%', 'NOT RECOMMENDED for microcaps'),
+            'swing': ('Daily candles, 5-day holds', '35 bps', '35.3%', 'Challenging but possible'),
+            'weekly': ('Daily candles, 10-day holds', '25 bps', '12.6%', 'OPTIMAL for microcaps'),
+            'monthly': ('Daily candles, 30-day holds', '20 bps', '3.4%', 'Best risk-adjusted')
+        }
+        
+        if args.timeframe in timeframe_info:
+            desc, slippage, annual_slip, note = timeframe_info[args.timeframe]
+            print_status(f"Timeframe: {args.timeframe.upper()}", "info")
+            print_status(f"  Description: {desc}", "info")
+            print_status(f"  Base Slippage: {slippage} per trade", "info")
+            print_status(f"  Expected Annual Slippage: {annual_slip}", "warning" if float(annual_slip.rstrip('%')) > 50 else "info")
+            print_status(f"  Note: {note}", "warning" if "NOT" in note else "success")
 
+    # Handle universe keyword
+    tickers = args.tickers
+    if args.universe:
+        if args.universe == 'oil':
+            tickers = ['oil']  # Will be expanded in GPEvolutionArena.__init__
+        else:
+            print_status(f"Unknown universe keyword: {args.universe}", "warning")
+    
     arena = GPEvolutionArena(
-        tickers=args.tickers,
+        tickers=tickers,
         start_date=args.start,
         end_date=args.end,
         population_size=args.population,
@@ -733,6 +851,11 @@ def main():
         elite_count=args.elite,
         parsimony_coefficient=args.parsimony,
         initial_capital=args.capital,
+        timeframe=args.timeframe,
+        rebalance_threshold=args.rebalance_threshold,
+        use_stops=args.use_stops,
+        use_kelly=args.use_kelly,
+        use_calmar_fitness=args.use_calmar_fitness,
     )
 
     arena.run(

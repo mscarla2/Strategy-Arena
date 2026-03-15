@@ -25,7 +25,9 @@ class SlippageResult:
     order_pct_adv: float
     base_slippage: float
     volume_impact: float
+    commission_fee: float
     total_slippage: float
+    total_cost_dollars: float
 
 
 class MicrocapSlippageModel:
@@ -37,16 +39,20 @@ class MicrocapSlippageModel:
     pressure moves the market.
     
     Realistic slippage: 20-30 bps per trade (0.2-0.3%)
+    Pink sheet commission: $6.95 per trade (fixed fee)
     """
     
-    def __init__(self, base_slippage_bps: float = 25, volume_impact_factor: float = 0.5):
+    def __init__(self, base_slippage_bps: float = 25, volume_impact_factor: float = 0.5,
+                 commission_per_trade: float = 6.95):
         """
         Args:
             base_slippage_bps: Base slippage in basis points (25 bps = 0.25%)
             volume_impact_factor: Additional slippage per % of ADV traded
+            commission_per_trade: Fixed commission per trade ($6.95 for pink sheets)
         """
         self.base_slippage_bps = base_slippage_bps
         self.volume_impact_factor = volume_impact_factor
+        self.commission_per_trade = commission_per_trade
     
     def calculate_slippage(
         self,
@@ -57,7 +63,7 @@ class MicrocapSlippageModel:
         lookback: int = 20
     ) -> SlippageResult:
         """
-        Calculate expected slippage for an order.
+        Calculate expected slippage for an order including commission fees.
         
         Args:
             ticker: Stock ticker
@@ -78,7 +84,9 @@ class MicrocapSlippageModel:
                 order_pct_adv=0,
                 base_slippage=0,
                 volume_impact=0,
-                total_slippage=0
+                commission_fee=0,
+                total_slippage=0,
+                total_cost_dollars=0
             )
         
         # Calculate Average Daily Volume (ADV)
@@ -89,17 +97,23 @@ class MicrocapSlippageModel:
         # Order size as % of ADV
         order_pct_adv = order_size_dollars / adv_dollars if adv_dollars > 0 else 0
         
-        # Base slippage
+        # Base slippage (percentage)
         base_slippage = self.base_slippage_bps / 10000
         
-        # Volume impact (square root model)
+        # Volume impact (square root model, percentage)
         volume_impact = self.volume_impact_factor * np.sqrt(order_pct_adv)
         
-        # Total slippage
-        total_slippage = base_slippage + volume_impact
+        # Commission fee (percentage of order size)
+        commission_fee_pct = self.commission_per_trade / order_size_dollars if order_size_dollars > 0 else 0
         
-        # Cap at 5% (extreme illiquidity)
-        total_slippage = min(total_slippage, 0.05)
+        # Total slippage (percentage)
+        total_slippage = base_slippage + volume_impact + commission_fee_pct
+        
+        # Cap at 10% (extreme illiquidity + small orders)
+        total_slippage = min(total_slippage, 0.10)
+        
+        # Total cost in dollars
+        total_cost_dollars = order_size_dollars * total_slippage
         
         return SlippageResult(
             ticker=ticker,
@@ -108,22 +122,28 @@ class MicrocapSlippageModel:
             order_pct_adv=order_pct_adv,
             base_slippage=base_slippage,
             volume_impact=volume_impact,
-            total_slippage=total_slippage
+            commission_fee=commission_fee_pct,
+            total_slippage=total_slippage,
+            total_cost_dollars=total_cost_dollars
         )
     
     def apply_slippage_to_returns(
         self,
         returns: float,
         turnover: float,
-        avg_slippage: float
+        avg_slippage: float,
+        num_trades: int = None,
+        portfolio_value: float = None
     ) -> float:
         """
-        Adjust returns for slippage.
+        Adjust returns for slippage including commission fees.
         
         Args:
             returns: Strategy returns
             turnover: Portfolio turnover rate
-            avg_slippage: Average slippage per trade
+            avg_slippage: Average slippage per trade (percentage)
+            num_trades: Number of trades (for commission calculation)
+            portfolio_value: Portfolio value (for commission calculation)
         
         Returns:
             Adjusted returns
@@ -131,7 +151,39 @@ class MicrocapSlippageModel:
         # Slippage cost = turnover * slippage * 2 (buy and sell)
         slippage_cost = turnover * avg_slippage * 2
         
+        # Add commission costs if provided
+        if num_trades is not None and portfolio_value is not None and portfolio_value > 0:
+            # Commission cost as percentage of portfolio
+            commission_cost = (num_trades * self.commission_per_trade) / portfolio_value
+            slippage_cost += commission_cost
+        
         return returns - slippage_cost
+    
+    def calculate_commission_impact(self, order_size_dollars: float) -> Dict[str, float]:
+        """
+        Calculate the impact of fixed commission on different order sizes.
+        
+        For small orders, the $6.95 commission can be a significant percentage.
+        For example:
+        - $100 order: 6.95% commission
+        - $500 order: 1.39% commission
+        - $1000 order: 0.695% commission
+        - $5000 order: 0.139% commission
+        
+        Args:
+            order_size_dollars: Order size in dollars
+        
+        Returns:
+            Dict with commission metrics
+        """
+        commission_pct = (self.commission_per_trade / order_size_dollars * 100) if order_size_dollars > 0 else 0
+        
+        return {
+            'commission_dollars': self.commission_per_trade,
+            'commission_pct': commission_pct,
+            'order_size': order_size_dollars,
+            'breakeven_move_pct': commission_pct * 2  # Need to overcome buy + sell commission
+        }
     
     def calculate_portfolio_slippage(
         self,
@@ -141,7 +193,7 @@ class MicrocapSlippageModel:
         lookback: int = 20
     ) -> Tuple[float, List[SlippageResult]]:
         """
-        Calculate average slippage across portfolio.
+        Calculate average slippage across portfolio including commission fees.
         
         Args:
             positions: Dict of {ticker: position_size_dollars}
@@ -180,13 +232,13 @@ class DilutionFilter:
     
     def __init__(
         self,
-        volume_spike_threshold: float = 5.0,
+        volume_spike_threshold: float = 3.0,
         price_drop_threshold: float = -0.10,
         lookback: int = 20
     ):
         """
         Args:
-            volume_spike_threshold: Volume / avg_volume ratio (5x)
+            volume_spike_threshold: Volume / avg_volume ratio (3x, lowered from 5x for microcaps)
             price_drop_threshold: Price drop threshold (-10%)
             lookback: Days for average volume calculation
         """

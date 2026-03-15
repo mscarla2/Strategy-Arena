@@ -1672,15 +1672,26 @@ class WalkForwardEvaluator:
         self,
         prices: pd.DataFrame,
         periods: List[Tuple[str, str, str, str]],
-        benchmark_results: List[Dict] = None,  # ADD THIS
+        benchmark_results: List[Dict] = None,
         transaction_cost: float = 0.002,
         rebalance_frequency: int = 21,
+        # Priority 1 & 2 components
+        rebalancer = None,
+        stop_manager = None,
+        position_sizer = None,
+        use_calmar_fitness: bool = False,
     ):
         self.prices = prices
         self.periods = periods
-        self.benchmark_results = benchmark_results or []  # ADD THIS
+        self.benchmark_results = benchmark_results or []
         self.transaction_cost = transaction_cost
         self.rebalance_frequency = rebalance_frequency
+        
+        # Priority 1 & 2 components
+        self.rebalancer = rebalancer
+        self.stop_manager = stop_manager
+        self.position_sizer = position_sizer
+        self.use_calmar_fitness = use_calmar_fitness
     
     def evaluate_strategy(self, strategy: GPStrategy) -> FitnessResult:
         """Evaluate strategy across all periods."""
@@ -1695,11 +1706,20 @@ class WalkForwardEvaluator:
         # Use pre-computed benchmarks, sliced to match period count
         benchmarks = self.benchmark_results[:len(period_results)]
         
-        return calculate_fitness(
-            period_results, 
-            benchmarks,
-            self.transaction_cost
-        )
+        # Use Calmar fitness if enabled (Priority 2.4)
+        if self.use_calmar_fitness:
+            from evolution.fitness_calmar import calculate_calmar_fitness
+            return calculate_calmar_fitness(
+                period_results,
+                benchmarks,
+                target_turnover=0.5
+            )
+        else:
+            return calculate_fitness(
+                period_results,
+                benchmarks,
+                self.transaction_cost
+            )
     
     def _evaluate_single_period(
         self,
