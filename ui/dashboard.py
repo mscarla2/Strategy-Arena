@@ -367,7 +367,7 @@ def build_fitness_evolution_chart(generation_stats: list) -> go.Figure:
 
 def main():
     st.set_page_config(
-        page_title="AlphaGene Dashboard",
+        page_title="AlphaGene Dashboard v3.0",
         page_icon="🧬",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -403,11 +403,16 @@ def main():
         </style>
     """, unsafe_allow_html=True)
     
-    # Header
+    # Header with version and status
     st.markdown("""
-        <h1 style='text-align: center; color: #58a6ff;'>
-            🧬 ALPHAGENE Strategy Dashboard
-        </h1>
+        <div style='text-align: center;'>
+            <h1 style='color: #58a6ff; margin-bottom: 0;'>
+                🧬 ALPHAGENE Strategy Dashboard
+            </h1>
+            <p style='color: #8b949e; font-size: 14px; margin-top: 5px;'>
+                v3.0 | Production Ready | Genetic Programming Arena
+            </p>
+        </div>
     """, unsafe_allow_html=True)
     
     # Sidebar - Strategy Selection
@@ -419,10 +424,10 @@ def main():
         st.warning("No strategies found. Run arena_runner_v3.py first.")
         return
     
-    # Strategy dropdown
+    # Strategy dropdown - sorted by fitness (already sorted from database query)
     strategy_options = {
-        f"{s['strategy_id'][:8]} | fit={s['fitness']:.3f} | {s['formula'][:30]}...": s['strategy_id']
-        for s in strategies
+        f"#{i+1} | fit={s['fitness']:.3f} | {s['formula'][:40]}...": s['strategy_id']
+        for i, s in enumerate(strategies)
     }
     
     selected_label = st.sidebar.selectbox(
@@ -442,6 +447,18 @@ def main():
     # Strategy Info Card
     st.sidebar.markdown("---")
     st.sidebar.subheader("📊 Strategy Info")
+    
+    # Show run metadata
+    run_date = selected_strategy.get('run_date', 'N/A')
+    if run_date and run_date != 'N/A':
+        try:
+            from datetime import datetime
+            run_dt = datetime.fromisoformat(run_date.replace('Z', '+00:00'))
+            run_date_str = run_dt.strftime('%Y-%m-%d %H:%M')
+        except:
+            run_date_str = str(run_date)[:16]
+        st.sidebar.caption(f"📅 Run: {run_date_str}")
+    
     st.sidebar.code(selected_strategy.get('formula', 'N/A'), language=None)
     
     col1, col2 = st.sidebar.columns(2)
@@ -451,6 +468,9 @@ def main():
     col1, col2 = st.sidebar.columns(2)
     col1.metric("Top %", f"{selected_strategy.get('top_pct', 0)}%")
     col2.metric("Generation", selected_strategy.get('generation', 'N/A'))
+    
+    # Strategy ID for reference
+    st.sidebar.caption(f"🔑 ID: {selected_strategy.get('strategy_id', 'N/A')[:16]}...")
     
     # Main Content
     if not strategy_results:
@@ -546,7 +566,17 @@ def main():
         df['Sharpe'] = df['Sharpe'].apply(lambda x: f"{x:.2f}")
         df['Max DD'] = df['Max DD'].apply(lambda x: f"{x:.1%}")
         
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, use_container_width=True, height=400)
+    
+    # Footer with system info
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.caption("🧬 AlphaGene v3.0")
+    with col2:
+        st.caption("📊 Genetic Programming Arena")
+    with col3:
+        st.caption("✅ Production Ready")
 
 
 if __name__ == "__main__":

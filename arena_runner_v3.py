@@ -254,6 +254,12 @@ class GPEvolutionArena:
         use_stops: bool = False,
         use_kelly: bool = False,
         use_calmar_fitness: bool = False,
+        # Priority 3+ parameters
+        enable_smc: bool = False,
+        enable_sr: bool = False,
+        enable_oil: bool = False,
+        enable_regime: bool = False,
+        enable_dilution: bool = False,
     ):
         self.start_date = start_date
         self.end_date = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -277,6 +283,13 @@ class GPEvolutionArena:
         self.use_kelly = use_kelly
         self.use_calmar_fitness = use_calmar_fitness
         
+        # Priority 3+ features
+        self.enable_smc = enable_smc
+        self.enable_sr = enable_sr
+        self.enable_oil = enable_oil
+        self.enable_regime = enable_regime
+        self.enable_dilution = enable_dilution
+        
         # Initialize new components
         self._init_priority_components()
 
@@ -288,7 +301,11 @@ class GPEvolutionArena:
             self.tickers = tickers if tickers else get_universe_for_period(start_date)
         self.data_fetcher = DataFetcher()
 
-        self.feature_lib = FeatureLibrary()
+        self.feature_lib = FeatureLibrary(
+            enable_smc=enable_smc,
+            enable_sr=enable_sr,
+            enable_oil=enable_oil
+        )
         self.generator = TreeGenerator(self.feature_lib.feature_names)
         self.operators = GPOperators(self.feature_lib.feature_names, max_depth)
 
@@ -473,7 +490,7 @@ class GPEvolutionArena:
         new_population = []
         seen_formulas: Set[str] = set()
 
-        # Elitism
+        # Elitism - keep top performers
         for elite in sorted_pop[:self.elite_count]:
             elite_copy = elite.copy()
             elite_copy.generation = self.generation + 1
@@ -485,34 +502,67 @@ class GPEvolutionArena:
                 new_population.append(elite_copy)
                 seen_formulas.add(formula)
 
+        # Check for convergence - if population is too similar, inject diversity
+        unique_formulas = len(set(s.get_formula() for s in self.population))
+        diversity_ratio = unique_formulas / len(self.population)
+        
+        # Adaptive mutation rate based on diversity
+        adaptive_mutation_prob = self.mutation_prob
+        if diversity_ratio < 0.3:  # Less than 30% unique
+            adaptive_mutation_prob = min(0.6, self.mutation_prob * 3)  # Triple mutation rate
+            print_status(f"Low diversity ({diversity_ratio:.1%}), increasing mutation to {adaptive_mutation_prob:.1%}", "warning")
+        
         # Generate rest with diversity check
         attempts = 0
-        max_attempts = self.population_size * 3
+        max_attempts = self.population_size * 5  # Increased attempts
         
         while len(new_population) < self.population_size and attempts < max_attempts:
             attempts += 1
             r = random.random()
 
-            if r < self.crossover_prob:
+            # Adjust probabilities based on diversity
+            crossover_threshold = self.crossover_prob if diversity_ratio > 0.3 else self.crossover_prob * 0.5
+            mutation_threshold = crossover_threshold + adaptive_mutation_prob
+
+            if r < crossover_threshold:
                 parent1 = self.tournament_select()
                 parent2 = self.tournament_select()
                 child = self.operators.crossover(parent1, parent2)
-            elif r < self.crossover_prob + self.mutation_prob:
+            elif r < mutation_threshold:
                 parent = self.tournament_select()
                 child = self.operators.mutate(parent)
             else:
-                parent = self.tournament_select()
-                child = parent.copy()
-                child.generation = self.generation + 1
-                child.origin = "reproduction"
-                child.strategy_id = str(uuid.uuid4())[:8]
+                # When diversity is low, prefer creating new random strategies
+                if diversity_ratio < 0.2:
+                    depth = random.randint(2, self.max_depth)
+                    tree = self.generator.random_tree(max_depth=depth, method="grow")
+                    child = GPStrategy(
+                        tree=tree,
+                        top_pct=random.choice([10, 15, 20, 25, 30]),
+                        generation=self.generation + 1,
+                        origin="random_injection"
+                    )
+                else:
+                    parent = self.tournament_select()
+                    child = parent.copy()
+                    child.generation = self.generation + 1
+                    child.origin = "reproduction"
+                    child.strategy_id = str(uuid.uuid4())[:8]
 
             if child.tree.depth() > self.max_depth:
                 continue
                 
             formula = child.get_formula()
+            # Only check duplicates within this generation, not globally
             if formula in seen_formulas:
-                continue
+                # If we're stuck with duplicates and diversity is low, force a mutation
+                if diversity_ratio < 0.3 and attempts > max_attempts * 0.5:
+                    child = self.operators.mutate(child)
+                    formula = child.get_formula()
+                    if formula in seen_formulas:
+                        continue
+                else:
+                    continue
                 
             new_population.append(child)
             seen_formulas.add(formula)
@@ -620,7 +670,7 @@ class GPEvolutionArena:
         return False
 
     def _save_to_database(self):
-        """Save evolution results to database."""
+        """Save evolution results to database - only best strategy per run."""
         print_status("Saving results...", "progress")
         
         config = {
@@ -634,38 +684,25 @@ class GPEvolutionArena:
         
         self.db.create_run(self.run_id, config)
         
+        # Only save the best strategy from this run (no duplicates)
         if self.best_strategy:
-            print(f"DEBUG: best_strategy.strategy_id = {self.best_strategy.strategy_id}")
-            print(f"DEBUG: has period_metrics = {hasattr(self.best_strategy, 'period_metrics')}")
-            
-            if hasattr(self.best_strategy, 'period_metrics'):
-                print(f"DEBUG: period_metrics = {self.best_strategy.period_metrics}")
-                print(f"DEBUG: len(period_metrics) = {len(self.best_strategy.period_metrics) if self.best_strategy.period_metrics else 0}")
-            
             self.db.save_strategy(self.best_strategy, self.run_id)
             
             if hasattr(self.best_strategy, 'period_metrics') and self.best_strategy.period_metrics:
-                print(f"DEBUG: Saving {len(self.best_strategy.period_metrics)} period results")
                 self.db.save_period_results(
                     self.best_strategy.strategy_id,
                     self.run_id,
                     self.best_strategy.period_metrics
                 )
-            else:
-                print("DEBUG: No period_metrics to save!")
         
-        sorted_pop = sorted(self.population, key=lambda s: s.fitness, reverse=True)[:10]
-        for strategy in sorted_pop:
-            if strategy.strategy_id != (self.best_strategy.strategy_id if self.best_strategy else None):
-                self.db.save_strategy(strategy, self.run_id)
-        
+        # Save generation statistics for evolution tracking
         for stats in self.generation_history:
             self.db.save_generation_stats(self.run_id, stats)
         
         best_id = self.best_strategy.strategy_id if self.best_strategy else ""
         self.db.complete_run(self.run_id, self.generation, self.best_fitness, best_id)
         
-        print_status(f"Saved: run_id={self.run_id}", "success")
+        print_status(f"Saved best strategy: {best_id[:8]}... (fitness={self.best_fitness:+.4f})", "success")
 
     def run(
         self,
@@ -810,6 +847,25 @@ def main():
                        help='Enable Kelly Criterion + volatility position sizing')
     parser.add_argument('--use-calmar-fitness', action='store_true',
                        help='Use Calmar Ratio fitness instead of Sharpe-based')
+    
+    # Priority 3+ parameters (Advanced Features)
+    parser.add_argument('--enable-smc', action='store_true',
+                       help='Enable Smart Money Concepts features (order blocks, FVG, liquidity sweeps)')
+    parser.add_argument('--enable-sr', action='store_true',
+                       help='Enable Support/Resistance features (volume profile, pivot points)')
+    parser.add_argument('--enable-oil', action='store_true',
+                       help='Enable oil-specific features (WTI/Brent correlation, crack spreads, inventory)')
+    parser.add_argument('--enable-regime', action='store_true',
+                       help='Enable regime detection for adaptive position sizing')
+    parser.add_argument('--enable-dilution', action='store_true',
+                       help='Enable enhanced dilution detection (SEC filings, insider trading, news)')
+    parser.add_argument('--use-nsga2', action='store_true',
+                       help='Use NSGA-II multi-objective optimization')
+    parser.add_argument('--objectives', type=str, default='sharpe,calmar',
+                       help='Objectives for NSGA-II (comma-separated: sharpe,calmar,sortino,return)')
+    parser.add_argument('--diversity-method', type=str, default=None,
+                       choices=['fitness_sharing', 'novelty', 'island'],
+                       help='Diversity preservation method')
 
     args = parser.parse_args()
     
@@ -856,6 +912,11 @@ def main():
         use_stops=args.use_stops,
         use_kelly=args.use_kelly,
         use_calmar_fitness=args.use_calmar_fitness,
+        enable_smc=args.enable_smc,
+        enable_sr=args.enable_sr,
+        enable_oil=args.enable_oil,
+        enable_regime=args.enable_regime,
+        enable_dilution=args.enable_dilution,
     )
 
     arena.run(

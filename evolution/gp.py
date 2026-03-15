@@ -491,11 +491,16 @@ class FeatureLibrary:
     Comprehensive feature library with ~90 orthogonalized features.
     """
     
-    def __init__(self):
+    def __init__(self, enable_smc=False, enable_sr=False, enable_oil=False):
+        self.enable_smc = enable_smc
+        self.enable_sr = enable_sr
+        self.enable_oil = enable_oil
+        
         self.feature_specs = self._build_feature_specs()
         self.feature_names = list(self.feature_specs.keys())
         self.max_lookback = 504  # 2 years
         self.feature_categories = self._build_category_map()
+        
         # Features to exclude from rank transform (already ranked or naturally bounded 0-1)
         self._skip_rank_transform = {
             'relative_strength_21d', 'relative_strength_63d', 'relative_strength_126d',
@@ -506,6 +511,23 @@ class FeatureLibrary:
             'mom_consistency_21d', 'mom_consistency_63d',
             'hurst_proxy_63d', 'hurst_proxy_126d',
         }
+        
+        # Initialize advanced feature calculators if enabled
+        self.smc_features = None
+        self.sr_features = None
+        self.oil_features = None
+        
+        if self.enable_smc:
+            from evolution.smart_money_features import SmartMoneyFeatures
+            self.smc_features = SmartMoneyFeatures()
+        
+        if self.enable_sr:
+            from evolution.support_resistance_features import SupportResistanceFeatures
+            self.sr_features = SupportResistanceFeatures()
+        
+        if self.enable_oil:
+            from evolution.oil_specific_features import OilSpecificFeatures
+            self.oil_features = OilSpecificFeatures()
     
     def _build_feature_specs(self) -> Dict:
         """Build all feature specifications."""
@@ -702,6 +724,45 @@ class FeatureLibrary:
         specs['return_autocorr_5d'] = ('return_autocorr', 21, 5)
         specs['abs_return_21d'] = ('abs_return_momentum', 21)
         specs['abs_return_63d'] = ('abs_return_momentum', 63)
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # SMART MONEY CONCEPTS (SMC) - Optional
+        # ═══════════════════════════════════════════════════════════════════
+        if self.enable_smc:
+            specs['smc_order_block_bull'] = ('smc', 'order_block_bull')
+            specs['smc_order_block_bear'] = ('smc', 'order_block_bear')
+            specs['smc_fvg_bull'] = ('smc', 'fvg_bull')
+            specs['smc_fvg_bear'] = ('smc', 'fvg_bear')
+            specs['smc_liquidity_sweep'] = ('smc', 'liquidity_sweep')
+            specs['smc_break_of_structure'] = ('smc', 'break_of_structure')
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # SUPPORT/RESISTANCE - Optional
+        # ═══════════════════════════════════════════════════════════════════
+        if self.enable_sr:
+            specs['sr_poc_distance'] = ('sr', 'poc_distance')
+            specs['sr_value_area_position'] = ('sr', 'value_area_position')
+            specs['sr_pivot_traditional'] = ('sr', 'pivot_traditional')
+            specs['sr_pivot_fibonacci'] = ('sr', 'pivot_fibonacci')
+            specs['sr_pivot_camarilla'] = ('sr', 'pivot_camarilla')
+            specs['sr_bb_position'] = ('sr', 'bb_position')
+            specs['sr_keltner_position'] = ('sr', 'keltner_position')
+            specs['sr_historical_level'] = ('sr', 'historical_level')
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # OIL-SPECIFIC FEATURES - Optional
+        # ═══════════════════════════════════════════════════════════════════
+        if self.enable_oil:
+            specs['oil_wti_correlation'] = ('oil', 'wti_correlation')
+            specs['oil_brent_correlation'] = ('oil', 'brent_correlation')
+            specs['oil_wti_beta'] = ('oil', 'wti_beta')
+            specs['oil_inventory_zscore'] = ('oil', 'inventory_zscore')
+            specs['oil_inventory_change'] = ('oil', 'inventory_change')
+            specs['oil_crack_spread_321'] = ('oil', 'crack_spread_321')
+            specs['oil_crack_spread_532'] = ('oil', 'crack_spread_532')
+            specs['oil_seasonal_driving'] = ('oil', 'seasonal_driving')
+            specs['oil_seasonal_heating'] = ('oil', 'seasonal_heating')
+            specs['oil_wti_brent_spread'] = ('oil', 'wti_brent_spread')
         
         return specs
     
@@ -1400,6 +1461,96 @@ class FeatureLibrary:
             returns = prices.pct_change().iloc[-period:]
             return returns.abs().mean() * np.sqrt(252)
         
+        # ═══════════════════════════════════════════════════════════════════
+        # SMART MONEY CONCEPTS (SMC)
+        # ═══════════════════════════════════════════════════════════════════
+        elif feature_type == 'smc':
+            if self.smc_features is None:
+                return pd.Series(0.0, index=tickers)
+            
+            feature_name = spec[1]
+            
+            # SMC features need high/low/close/volume for each ticker
+            # Calculate per ticker and aggregate
+            results = {}
+            for ticker in tickers:
+                try:
+                    ticker_prices = prices[ticker]
+                    ticker_volume = volume[ticker] if volume is not None else pd.Series(0, index=ticker_prices.index)
+                    
+                    # For SMC, we need OHLC but we only have close prices
+                    # Use close as proxy for high/low (conservative estimate)
+                    smc_result = self.smc_features.calculate_all_features(
+                        high=ticker_prices,
+                        low=ticker_prices,
+                        close=ticker_prices,
+                        volume=ticker_volume
+                    )
+                    
+                    if feature_name in smc_result:
+                        results[ticker] = smc_result[feature_name]
+                    else:
+                        results[ticker] = 0.0
+                except:
+                    results[ticker] = 0.0
+            
+            return pd.Series(results)
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # SUPPORT/RESISTANCE
+        # ═══════════════════════════════════════════════════════════════════
+        elif feature_type == 'sr':
+            if self.sr_features is None:
+                return pd.Series(0.0, index=tickers)
+            
+            feature_name = spec[1]
+            
+            # S/R features need high/low/close/volume for each ticker
+            results = {}
+            for ticker in tickers:
+                try:
+                    ticker_prices = prices[ticker]
+                    ticker_volume = volume[ticker] if volume is not None else pd.Series(0, index=ticker_prices.index)
+                    
+                    # Use close as proxy for high/low
+                    sr_result = self.sr_features.calculate_all_features(
+                        high=ticker_prices,
+                        low=ticker_prices,
+                        close=ticker_prices,
+                        volume=ticker_volume
+                    )
+                    
+                    if feature_name in sr_result:
+                        results[ticker] = sr_result[feature_name]
+                    else:
+                        results[ticker] = 0.0
+                except:
+                    results[ticker] = 0.0
+            
+            return pd.Series(results)
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # OIL-SPECIFIC FEATURES
+        # ═══════════════════════════════════════════════════════════════════
+        elif feature_type == 'oil':
+            if self.oil_features is None:
+                return pd.Series(0.0, index=tickers)
+            
+            feature_name = spec[1]
+            # Get date range for oil data fetching
+            start_date = prices.index[0] if len(prices) > 0 else None
+            end_date = prices.index[-1] if len(prices) > 0 else None
+            
+            if start_date and end_date:
+                oil_results = self.oil_features.calculate_all_features(
+                    prices, volume, start_date, end_date
+                )
+                
+                if feature_name in oil_results:
+                    return oil_results[feature_name]
+            
+            return pd.Series(0.0, index=tickers)
+        
         # Default
         return pd.Series(0.0, index=tickers)
 
@@ -1825,6 +1976,9 @@ class GPPopulation:
         mutation_prob: float = 0.25,
         elite_count: int = 2,
         parsimony_coefficient: float = 0.002,
+        enable_smc: bool = False,
+        enable_sr: bool = False,
+        enable_oil: bool = False,
     ):
         self.population_size = population_size
         self.n_islands = n_islands
@@ -1837,7 +1991,11 @@ class GPPopulation:
         self.elite_count = elite_count
         self.parsimony_coefficient = parsimony_coefficient
         
-        self.feature_lib = FeatureLibrary()
+        self.feature_lib = FeatureLibrary(
+            enable_smc=enable_smc,
+            enable_sr=enable_sr,
+            enable_oil=enable_oil
+        )
         self.generator = TreeGenerator(self.feature_lib.feature_names)
         self.operators = GPOperators(self.feature_lib.feature_names, max_depth)
         
