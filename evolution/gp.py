@@ -916,7 +916,13 @@ class FeatureLibrary:
                     series = series.iloc[:, 0]
                 else:
                     series = series.iloc[:, 0]  # Take first column as fallback
-            
+            if series.dtype == object:
+                print(f"BAD FEATURE: {name} has object dtype — first value type: {type(series.iloc[0])}")
+                try:
+                    series = series.astype(float)
+                except (ValueError, TypeError):
+                    ranked[name] = pd.Series(0.0, index=series.index)
+                    continue
             if series.empty or bool(series.isna().all()):
                 ranked[name] = series
                 continue
@@ -1559,7 +1565,8 @@ class FeatureLibrary:
                     )
                     
                     if feature_name in smc_result:
-                        results[ticker] = smc_result[feature_name]
+                        feat = smc_result[feature_name]
+                        results[ticker] = float(feat.iloc[-1]) if hasattr(feat, 'iloc') and len(feat) > 0 else 0.0
                     else:
                         results[ticker] = 0.0
                 except:
@@ -1592,7 +1599,8 @@ class FeatureLibrary:
                     )
                     
                     if feature_name in sr_result:
-                        results[ticker] = sr_result[feature_name]
+                        feat = sr_result[feature_name]
+                        results[ticker] = float(feat.iloc[-1]) if hasattr(feat, 'iloc') and len(feat) > 0 else 0.0
                     else:
                         results[ticker] = 0.0
                 except:

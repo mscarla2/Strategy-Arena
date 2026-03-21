@@ -625,6 +625,8 @@ class GPEvolutionArena:
                     "success"
                 )
             except Exception as e:
+                import traceback
+                traceback.print_exc()  # ← shows the real error
                 print_status(f"Feature cache failed ({e}), falling back to on-demand", "warning")
                 self.feature_cache = {}
         else:

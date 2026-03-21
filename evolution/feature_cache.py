@@ -107,6 +107,8 @@ class FeaturePrecomputeCache:
                 )
                 self.cache[date_key] = features
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 logger.warning(f"Failed to compute features for {date_key}: {e}")
                 continue
             
