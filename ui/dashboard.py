@@ -518,7 +518,7 @@ def main():
     # Charts Row 1 - Cumulative Returns (full width)
     st.plotly_chart(
         build_cumulative_returns_chart(strategy_results, benchmarks, "Strategy"),
-        use_container_width=True
+        width='stretch'
     )
     
     # Charts Row 2 - Period Returns & Drawdowns
@@ -527,13 +527,13 @@ def main():
     with col1:
         st.plotly_chart(
             build_period_comparison_chart(strategy_results, benchmarks),
-            use_container_width=True
+            width='stretch'
         )
     
     with col2:
         st.plotly_chart(
             build_drawdown_chart(strategy_results),
-            use_container_width=True
+            width='stretch'
         )
     
     # Charts Row 3 - Sharpe & Fitness Evolution
@@ -542,14 +542,14 @@ def main():
     with col1:
         st.plotly_chart(
             build_rolling_sharpe_chart(strategy_results, benchmarks),
-            use_container_width=True
+            width='stretch'
         )
     
     with col2:
         if generation_stats:
             st.plotly_chart(
                 build_fitness_evolution_chart(generation_stats),
-                use_container_width=True
+                width='stretch'
             )
         else:
             st.info("No generation stats available for this run.")
@@ -566,7 +566,7 @@ def main():
         df['Sharpe'] = df['Sharpe'].apply(lambda x: f"{x:.2f}")
         df['Max DD'] = df['Max DD'].apply(lambda x: f"{x:.1%}")
         
-        st.dataframe(df, use_container_width=True, height=400)
+        st.dataframe(df, width='stretch', height=400)
     
     # Footer with system info
     st.markdown("---")

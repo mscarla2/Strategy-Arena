@@ -2,6 +2,7 @@
 """
 ALPHAGENE Arena Runner v3.0
 Genetic Programming - Evolves expression trees instead of fixed genes.
+OPTIMIZED: Feature caching, parallel evaluation, oil-specific benchmarks
 """
 
 import os
@@ -13,6 +14,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Set
 import warnings
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 warnings.filterwarnings('ignore')
 
@@ -27,6 +30,13 @@ from config import (
     TRADING_DAYS_PER_YEAR,
     DEFAULT_INITIAL_CAPITAL,
     RISK_FREE_RATE,
+    UNIVERSE_TYPE,
+    RECENCY_HALF_LIFE,
+    USE_EXPANDING_WINDOW,
+    OIL_USE_EXPANDED_UNIVERSE,
+    OIL_PRIMARY_BENCHMARK,
+    ENABLE_FEATURE_CACHE,
+    FEATURE_CACHE_MAX_DATES,
 )
 
 from data import DataFetcher, get_universe_for_period
@@ -37,6 +47,8 @@ from evolution.gp import (
     TreeGenerator,
     FeatureLibrary,
     WalkForwardEvaluator,
+    evaluate_strategy_parallel,
+    calculate_fitness_v2,
 )
 
 from evolution.gp_storage import GPDatabase
@@ -114,7 +126,8 @@ def calculate_benchmark(
     method: str = "equal_weight",
     lookback: int = 252,
     top_pct: int = 20,
-    rebalance: bool = True
+    rebalance: bool = True,
+    benchmark_ticker: str = None
 ) -> Dict[str, float]:
     """
     Calculate benchmark returns for a period.
@@ -126,9 +139,11 @@ def calculate_benchmark(
         method: Benchmark type:
             - "equal_weight": Equal-weight portfolio (default, passive baseline)
             - "momentum": Top 20% by 12-month momentum (active strategy)
+            - "single_ticker": Single ticker benchmark (e.g., USO, BNO)
         lookback: Lookback period for momentum calculation (days)
         top_pct: Percentage of stocks to select for momentum
         rebalance: If False, true buy & hold (no rebalancing)
+        benchmark_ticker: Ticker to use for single_ticker method
     
     Returns:
         Dict with total_return, sharpe_ratio, max_drawdown
@@ -191,6 +206,19 @@ def calculate_benchmark(
         daily_returns = period_prices.pct_change().dropna()
         portfolio_returns = daily_returns.mean(axis=1)
     
+    elif method == "single_ticker":
+        # Single ticker benchmark (e.g., USO for oil)
+        if benchmark_ticker is None or benchmark_ticker not in prices.columns:
+            return {'total_return': 0, 'sharpe_ratio': 0, 'max_drawdown': 0}
+        
+        mask = (prices.index >= start_dt) & (prices.index <= end_dt)
+        period_prices = prices.loc[mask, benchmark_ticker]
+        
+        if len(period_prices) < 2:
+            return {'total_return': 0, 'sharpe_ratio': 0, 'max_drawdown': 0}
+        
+        portfolio_returns = period_prices.pct_change().dropna()
+    
     else:
         # Unknown method, default to equal-weight
         mask = (prices.index >= start_dt) & (prices.index <= end_dt)
@@ -241,7 +269,7 @@ class GPEvolutionArena:
         start_date: str = "2020-01-01",
         end_date: str = None,
         population_size: int = 50,
-        max_depth: int = 5,
+        max_depth: int = 7,
         tournament_size: int = 3,
         crossover_prob: float = 0.7,
         mutation_prob: float = 0.2,
@@ -260,6 +288,12 @@ class GPEvolutionArena:
         enable_oil: bool = False,
         enable_regime: bool = False,
         enable_dilution: bool = False,
+        # Performance optimization
+        parallel_workers: int = 10,
+        # RC-3: Fitness v2 parameters
+        universe_type: str = None,  # Auto-detected if None
+        recency_half_life: int = None,  # Uses config default if None
+        use_fitness_v2: bool = False,
     ):
         self.start_date = start_date
         self.end_date = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -290,15 +324,63 @@ class GPEvolutionArena:
         self.enable_regime = enable_regime
         self.enable_dilution = enable_dilution
         
+        # RC-3: Fitness v2 parameters
+        self.recency_half_life = recency_half_life or RECENCY_HALF_LIFE
+        self.use_fitness_v2 = use_fitness_v2
+        
+        # Performance optimization
+        # If parallel_workers is 0, use sequential (1 worker)
+        # If parallel_workers > 0, use that many workers
+        # If parallel_workers < 0, auto-detect (cpu_count - 1)
+        if parallel_workers == 0:
+            self.parallel_workers = 1  # Sequential evaluation
+        elif parallel_workers > 0:
+            self.parallel_workers = parallel_workers
+        else:
+            self.parallel_workers = max(1, cpu_count() - 1)  # Auto-detect
+        
         # Initialize new components
         self._init_priority_components()
 
         # Handle special universe keywords
+        # RC-4: Expanded oil universe with reference panel
+        self.is_oil_universe = False
+        self.tradeable_tickers = None  # None = all tickers are tradeable
+        self.oil_reference_panel = []
+        
         if tickers and len(tickers) == 1 and tickers[0] == 'oil':
-            from data.universe import get_oil_universe
-            self.tickers = get_oil_universe()
+            from data.universe import (
+                get_oil_universe, get_oil_tradeable_tickers,
+                get_oil_reference_panel, get_oil_benchmarks
+            )
+            self.is_oil_universe = True
+            
+            if OIL_USE_EXPANDED_UNIVERSE:
+                # RC-4: Download full universe (tradeable + reference + benchmarks)
+                self.tickers = get_oil_universe(expanded=True)
+                # Only these tickers can be held in the portfolio
+                self.tradeable_tickers = get_oil_tradeable_tickers()
+                self.oil_reference_panel = get_oil_reference_panel()
+                print_status(
+                    f"Oil expanded universe: {len(self.tickers)} total "
+                    f"({len(self.tradeable_tickers)} tradeable, "
+                    f"{len(self.oil_reference_panel)} reference panel)",
+                    "info"
+                )
+            else:
+                # Legacy: 8-ticker universe
+                self.tickers = get_oil_universe(expanded=False)
         else:
             self.tickers = tickers if tickers else get_universe_for_period(start_date)
+        
+        # RC-3: Auto-detect universe type if not specified
+        if universe_type:
+            self.universe_type = universe_type
+        elif self.is_oil_universe:
+            self.universe_type = 'oil_microcap'
+        else:
+            self.universe_type = UNIVERSE_TYPE
+        
         self.data_fetcher = DataFetcher()
 
         self.feature_lib = FeatureLibrary(
@@ -322,6 +404,10 @@ class GPEvolutionArena:
         self.prices: Optional[pd.DataFrame] = None
         self.periods: List[Tuple[str, str, str, str]] = []
         self.benchmark_results: List[Dict] = []
+        self.oil_benchmark_results: List[Dict] = []  # USO/BNO benchmarks
+        
+        # Feature cache for performance
+        self.feature_cache: Optional[Dict[str, pd.DataFrame]] = None
     
     def _init_priority_components(self):
         """Initialize Priority 1 & 2 components."""
@@ -382,7 +468,7 @@ class GPEvolutionArena:
         test_months: int = 3,
         step_months: int = 3
     ) -> List[Tuple[str, str, str, str]]:
-        """Generate walk-forward train/test periods."""
+        """Generate walk-forward train/test periods with anchored recent period."""
         periods = []
         start = pd.Timestamp(self.start_date)
         end = pd.Timestamp(self.end_date)
@@ -397,6 +483,30 @@ class GPEvolutionArena:
             periods.append((train_start, train_end, test_start, test_end))
             current += pd.DateOffset(months=step_months)
 
+        # ═══════════════════════════════════════════════════════════════
+        # RC-1/RC-3: Anchored recent period — guarantees most recent data
+        # is always in the evaluation window (e.g., March 2026)
+        # ═══════════════════════════════════════════════════════════════
+        recent_test_end = end
+        recent_test_start = recent_test_end - pd.DateOffset(months=test_months)
+        recent_train_end = recent_test_start
+        recent_train_start = recent_train_end - pd.DateOffset(months=train_months)
+        
+        anchored_period = (
+            recent_train_start.strftime("%Y-%m-%d"),
+            recent_train_end.strftime("%Y-%m-%d"),
+            recent_test_start.strftime("%Y-%m-%d"),
+            recent_test_end.strftime("%Y-%m-%d"),
+        )
+        
+        # Only add if it doesn't duplicate the last standard period
+        if not periods or anchored_period != periods[-1]:
+            periods.append(anchored_period)
+            print_status(
+                f"Anchored recent period: test {anchored_period[2]} to {anchored_period[3]}",
+                "info"
+            )
+
         return periods
 
     def _calculate_benchmarks(self):
@@ -404,23 +514,65 @@ class GPEvolutionArena:
         print_status("Calculating benchmarks...", "progress")
         
         self.benchmark_results = []
+        self.oil_benchmark_results = []
+        
         for train_start, train_end, test_start, test_end in self.periods:
-            bench = calculate_benchmark(
-                self.prices,
-                test_start,
-                test_end,
-                method="equal_weight",
-                rebalance=False
-            )
+            # RC-4: Use XLE as primary benchmark for oil universe if available
+            if self.is_oil_universe and OIL_PRIMARY_BENCHMARK in self.prices.columns:
+                bench = calculate_benchmark(
+                    self.prices,
+                    test_start,
+                    test_end,
+                    method="single_ticker",
+                    benchmark_ticker=OIL_PRIMARY_BENCHMARK
+                )
+            else:
+                # Standard equal-weight benchmark
+                bench = calculate_benchmark(
+                    self.prices,
+                    test_start,
+                    test_end,
+                    method="equal_weight",
+                    rebalance=False
+                )
             bench['test_start'] = test_start
             bench['test_end'] = test_end
             self.benchmark_results.append(bench)
             
-            self.db.save_benchmark(self.run_id, 'equal_weight_buy_hold', test_start, test_end, bench)
+            bench_name = f'{OIL_PRIMARY_BENCHMARK}_benchmark' if self.is_oil_universe else 'equal_weight_buy_hold'
+            self.db.save_benchmark(self.run_id, bench_name, test_start, test_end, bench)
+            
+            # Oil-specific benchmarks (USO, BNO, XLE, XOP)
+            if self.is_oil_universe:
+                for oil_ticker in ['USO', 'BNO', 'XLE', 'XOP']:
+                    if oil_ticker in self.prices.columns:
+                        oil_bench = calculate_benchmark(
+                            self.prices,
+                            test_start,
+                            test_end,
+                            method="single_ticker",
+                            benchmark_ticker=oil_ticker
+                        )
+                        oil_bench['test_start'] = test_start
+                        oil_bench['test_end'] = test_end
+                        oil_bench['ticker'] = oil_ticker
+                        self.oil_benchmark_results.append(oil_bench)
+                        
+                        self.db.save_benchmark(self.run_id, f'{oil_ticker}_benchmark', test_start, test_end, oil_bench)
         
         avg_sharpe = np.mean([b['sharpe_ratio'] for b in self.benchmark_results])
         avg_ret = np.mean([b['total_return'] for b in self.benchmark_results])
-        print_status(f"Benchmark: avg Sharpe={avg_sharpe:.2f}, avg Return={avg_ret:.1%}", "success")
+        bench_label = f"{OIL_PRIMARY_BENCHMARK}" if self.is_oil_universe else "Equal-Weight"
+        print_status(f"{bench_label} Benchmark: avg Sharpe={avg_sharpe:.2f}, avg Return={avg_ret:.1%}", "success")
+        
+        # Print oil benchmarks if available
+        if self.oil_benchmark_results:
+            for ticker in ['USO', 'BNO', 'XLE', 'XOP']:
+                ticker_results = [b for b in self.oil_benchmark_results if b.get('ticker') == ticker]
+                if ticker_results:
+                    avg_sharpe_oil = np.mean([b['sharpe_ratio'] for b in ticker_results])
+                    avg_ret_oil = np.mean([b['total_return'] for b in ticker_results])
+                    print_status(f"{ticker} Benchmark: avg Sharpe={avg_sharpe_oil:.2f}, avg Return={avg_ret_oil:.1%}", "success")
 
     def initialize_population(self):
         """Create initial population using ramped half-and-half."""
@@ -444,8 +596,52 @@ class GPEvolutionArena:
 
         print_status(f"Created {len(self.population)} strategies", "success")
 
-    def evaluate_population(self) -> Dict[str, Tuple[float, List[Dict]]]:
-        """Evaluate all strategies with walk-forward validation."""
+    def _precompute_features(self):
+        """
+        Pre-compute all features once for performance optimization (RC-5).
+        
+        Replaces the placeholder with a proper FeaturePrecomputeCache that
+        computes features for all rebalance dates across all walk-forward periods.
+        """
+        if ENABLE_FEATURE_CACHE and hasattr(self.feature_lib, 'compute_all'):
+            print_status("Pre-computing features for all rebalance dates (RC-5)...", "progress")
+            try:
+                from evolution.feature_cache import FeaturePrecomputeCache
+                
+                # Get volume data if available
+                volume = getattr(self, 'volume', None)
+                
+                self.feature_cache = FeaturePrecomputeCache(
+                    feature_lib=self.feature_lib,
+                    prices=self.prices,
+                    volume=volume,
+                    periods=self.periods,
+                    rebalance_frequency=21,
+                    max_dates=FEATURE_CACHE_MAX_DATES,
+                )
+                print_status(
+                    f"Feature cache ready: {self.feature_cache.stats['cached_dates']} dates, "
+                    f"{self.feature_cache.stats['features_per_date']} features each",
+                    "success"
+                )
+            except Exception as e:
+                print_status(f"Feature cache failed ({e}), falling back to on-demand", "warning")
+                self.feature_cache = {}
+        else:
+            print_status("Feature caching: on-demand mode", "info")
+            self.feature_cache = {}
+
+    def evaluate_population(self, use_parallel: bool = True, n_jobs: int = None) -> Dict[str, Tuple[float, List[Dict]]]:
+        """
+        Evaluate all strategies with walk-forward validation.
+        
+        Args:
+            use_parallel: Enable parallel evaluation (default: True)
+            n_jobs: Number of parallel workers (default: cpu_count() - 1)
+        
+        Returns:
+            Dict mapping strategy_id to (fitness, period_results)
+        """
         evaluator = WalkForwardEvaluator(
             prices=self.prices,
             periods=self.periods,
@@ -457,21 +653,65 @@ class GPEvolutionArena:
             stop_manager=self.stop_manager,
             position_sizer=self.position_sizer,
             use_calmar_fitness=self.use_calmar_fitness,
+            # RC-3: Fitness v2 parameters
+            universe_type=self.universe_type,
+            recency_half_life=self.recency_half_life,
+            use_fitness_v2=self.use_fitness_v2,
+            # RC-4: Oil reference panel — restrict portfolio to tradeable tickers
+            tradeable_tickers=self.tradeable_tickers,
         )
         
         results = {}
         
-        for i, strategy in enumerate(self.population):
-            print_progress(i + 1, len(self.population), "Evaluating")
+        if use_parallel and len(self.population) > 1:
+            # Parallel evaluation using multiprocessing
+            if n_jobs is None:
+                n_jobs = max(1, cpu_count() - 1)  # Leave one core free
             
-            fitness_result = evaluator.evaluate_strategy(strategy)
+            print_status(f"Evaluating {len(self.population)} strategies using {n_jobs} parallel workers...", "progress")
             
-            strategy.period_metrics = fitness_result.period_results
-            strategy.fitness = fitness_result.total
+            # Serialize evaluator config for pickling
+            evaluator_config = evaluator.to_config()
             
-            results[strategy.strategy_id] = (fitness_result.total, fitness_result.period_results)
+            # Prepare arguments for parallel evaluation
+            eval_args = [(strategy, evaluator_config) for strategy in self.population]
+            
+            # Use multiprocessing Pool for parallel evaluation with progress tracking
+            with Pool(processes=n_jobs) as pool:
+                # Use imap_unordered with chunksize=1 for real-time progress updates
+                parallel_results = []
+                for i, result in enumerate(pool.imap_unordered(evaluate_strategy_parallel, eval_args, chunksize=1)):
+                    parallel_results.append(result)
+                    print_progress(i + 1, len(self.population), "Evaluating")
+                
+                print()  # New line after progress bar
+            
+            # Update strategies and collect results
+            # Note: results are in completion order, not original order
+            strategy_map = {s.strategy_id: s for s in self.population}
+            for strategy_id, fitness, period_results in parallel_results:
+                if strategy_id in strategy_map:
+                    strategy_map[strategy_id].period_metrics = period_results
+                    strategy_map[strategy_id].fitness = fitness
+                    results[strategy_id] = (fitness, period_results)
+            
+            print_status(f"Completed parallel evaluation", "success")
+        else:
+            # Sequential evaluation (fallback or single strategy)
+            print_status(f"Evaluating {len(self.population)} strategies sequentially...", "progress")
+            
+            for i, strategy in enumerate(self.population):
+                print_progress(i + 1, len(self.population), "Evaluating")
+                
+                fitness_result = evaluator.evaluate_strategy(strategy)
+                
+                strategy.period_metrics = fitness_result.period_results
+                strategy.fitness = fitness_result.total
+                
+                results[strategy.strategy_id] = (fitness_result.total, fitness_result.period_results)
+            
+            print()
         
-        print()
         return results
 
     def adjusted_fitness(self, strategy: GPStrategy) -> float:
@@ -600,7 +840,12 @@ class GPEvolutionArena:
         print_section(f"GENERATION {self.generation}", "🧬")
         print_status(f"Evaluating {len(self.population)} strategies...", "info")
 
-        results = self.evaluate_population()
+        # Use parallel evaluation if parallel_workers > 1
+        use_parallel = self.parallel_workers > 1
+        results = self.evaluate_population(
+            use_parallel=use_parallel,
+            n_jobs=self.parallel_workers if use_parallel else None
+        )
 
         fitnesses = [s.fitness for s in self.population]
         complexities = [s.complexity() for s in self.population]
@@ -766,6 +1011,9 @@ class GPEvolutionArena:
             print_status(f"Insufficient data: {len(self.prices)} days", "error")
             return []
 
+        # Pre-compute features for performance
+        self._precompute_features()
+        
         self._calculate_benchmarks()
         self.initialize_population()
 
@@ -814,10 +1062,22 @@ class GPEvolutionArena:
                 bench_ret = np.mean([b['total_return'] for b in self.benchmark_results])
                 bench_sharpe = np.mean([b['sharpe_ratio'] for b in self.benchmark_results])
                 
-                print(f"\n  VS BENCHMARK:")
+                bench_label = f"{OIL_PRIMARY_BENCHMARK}" if self.is_oil_universe else "EQUAL-WEIGHT"
+                print(f"\n  VS {bench_label} BENCHMARK:")
                 print(f"    Strategy:  ret={strat_ret:+.1%}  sharpe={strat_sharpe:.2f}")
                 print(f"    Benchmark: ret={bench_ret:+.1%}  sharpe={bench_sharpe:.2f}")
                 print(f"    Alpha:     {strat_ret - bench_ret:+.1%}")
+                
+                # Oil-specific benchmarks
+                if self.oil_benchmark_results:
+                    print(f"\n  VS OIL BENCHMARKS:")
+                    for ticker in ['USO', 'BNO', 'XLE', 'XOP']:
+                        ticker_results = [b for b in self.oil_benchmark_results if b.get('ticker') == ticker]
+                        if ticker_results:
+                            oil_ret = np.mean([b['total_return'] for b in ticker_results])
+                            oil_sharpe = np.mean([b['sharpe_ratio'] for b in ticker_results])
+                            print(f"    {ticker}:      ret={oil_ret:+.1%}  sharpe={oil_sharpe:.2f}")
+                            print(f"    Alpha vs {ticker}: {strat_ret - oil_ret:+.1%}")
 
         print()
 
@@ -878,6 +1138,19 @@ def main():
     parser.add_argument('--diversity-method', type=str, default=None,
                        choices=['fitness_sharing', 'novelty', 'island'],
                        help='Diversity preservation method')
+    
+    # Performance optimization
+    parser.add_argument('--parallel-workers', type=int, default=-1,
+                       help='Number of parallel workers for strategy evaluation (0=sequential, >0=specific count, -1=auto-detect)')
+    
+    # RC-3: Fitness v2 parameters
+    parser.add_argument('--use-fitness-v2', action='store_true',
+                       help='Use enhanced fitness v2 with recency weighting + universe-adaptive penalties (RC-3)')
+    parser.add_argument('--universe-type', type=str, default=None,
+                       choices=['general', 'oil_microcap', 'oil_largecap'],
+                       help='Universe type for fitness penalty calibration (auto-detected if not set)')
+    parser.add_argument('--recency-half-life', type=int, default=None,
+                       help='Recency weighting half-life in periods (default: 4 = 1 year with quarterly steps)')
 
     args = parser.parse_args()
     
@@ -929,6 +1202,11 @@ def main():
         enable_oil=args.enable_oil,
         enable_regime=args.enable_regime,
         enable_dilution=args.enable_dilution,
+        parallel_workers=args.parallel_workers,
+        # RC-3: Fitness v2 parameters
+        universe_type=args.universe_type,
+        recency_half_life=args.recency_half_life,
+        use_fitness_v2=args.use_fitness_v2,
     )
 
     arena.run(

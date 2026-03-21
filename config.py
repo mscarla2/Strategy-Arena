@@ -24,7 +24,7 @@ TRADING_DAYS_PER_YEAR = 252
 # ═══════════════════════════════════════════════════════════════════════════════
 
 HISTORY_START = "1980-01-01"
-HISTORY_END = "2024-12-31"
+HISTORY_END = "2026-12-31"  # Future-proof for full year
 
 # Walk-forward test periods (year by year)
 TEST_PERIODS = [
@@ -77,6 +77,8 @@ TEST_PERIODS = [
     ("2022-01-01", "2022-12-31"),  # Bear market
     ("2023-01-01", "2023-12-31"),
     ("2024-01-01", "2024-12-31"),
+    ("2025-01-01", "2025-12-31"),
+    ("2026-01-01", "2026-12-31"),
 ]
 
 # Crisis periods for stress testing
@@ -99,3 +101,39 @@ DEFAULT_COMMISSION = 0.001  # 0.1% per trade
 DEFAULT_SLIPPAGE = 0.0005   # 0.05% slippage
 DEFAULT_REBALANCE_FREQUENCY = "monthly"
 MIN_TICKERS_REQUIRED = 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FITNESS FUNCTION SETTINGS (RC-3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Universe type for fitness penalty calibration
+# Options: 'general', 'oil_microcap', 'oil_largecap'
+UNIVERSE_TYPE = "general"
+
+# Recency weighting half-life (in walk-forward periods)
+# Default 4 periods = 1 year with quarterly steps
+# Lower = more emphasis on recent performance
+RECENCY_HALF_LIFE = 4
+
+# Whether to use expanding window for walk-forward training
+USE_EXPANDING_WINDOW = False
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OIL UNIVERSE SETTINGS (RC-4)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Whether to use expanded oil universe with reference panel
+OIL_USE_EXPANDED_UNIVERSE = True
+
+# Primary oil benchmark ticker (XLE is more representative than equal-weight)
+OIL_PRIMARY_BENCHMARK = "XLE"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FEATURE CACHE SETTINGS (RC-5)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Enable feature pre-computation cache
+ENABLE_FEATURE_CACHE = True
+
+# Maximum number of rebalance dates to cache (memory management)
+FEATURE_CACHE_MAX_DATES = 500

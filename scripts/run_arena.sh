@@ -15,9 +15,9 @@ echo ""
 
 # Basic Parameters
 UNIVERSE="oil"
-START_DATE="2023-01-01"
+START_DATE="2013-01-01"
 POPULATION=50
-GENERATIONS=30
+GENERATIONS=10
 TIMEFRAME="weekly"
 
 # Walk-Forward Configuration
@@ -26,12 +26,15 @@ TEST_MONTHS=3
 STEP_MONTHS=3
 
 # Evolution Parameters
-MAX_DEPTH=5
+MAX_DEPTH=7
 TOURNAMENT=3
 CROSSOVER=0.7
 MUTATION=0.2
 ELITE=2
 PARSIMONY=0.001
+
+# Performance
+PARALLEL_WORKERS=-1  # Auto-detect (use -1), or set specific number, or 0 for sequential
 
 # Advanced Features (comment out to disable)
 ENABLE_SMC="--enable-smc"
@@ -55,6 +58,7 @@ echo "  Date Range: $START_DATE to present"
 echo "  Population: $POPULATION"
 echo "  Generations: $GENERATIONS"
 echo "  Timeframe: $TIMEFRAME"
+echo "  Parallel Workers: $PARALLEL_WORKERS (auto-detect)"
 echo ""
 echo "🎯 Advanced Features:"
 echo "  ✓ Smart Money Concepts (Order Blocks, FVG, Liquidity Sweeps)"
@@ -103,6 +107,7 @@ python3 arena_runner_v3.py \
     --mutation $MUTATION \
     --elite $ELITE \
     --parsimony $PARSIMONY \
+    --parallel-workers $PARALLEL_WORKERS \
     $ENABLE_SMC \
     $ENABLE_SR \
     $ENABLE_OIL \
@@ -134,5 +139,6 @@ echo "     sqlite3 data/gp_strategies.db"
 echo ""
 echo "  4. Run Another Evolution:"
 echo "     bash run_arena_quick.sh    # Quick test (5 gen)"
-echo "     bash run_arena.sh           # Full run (30 gen)"
+echo "     bash run_arena_oil.sh       # Oil stocks (30 gen)"
+echo "     bash run_arena_general.sh   # General stocks (30 gen)"
 echo ""

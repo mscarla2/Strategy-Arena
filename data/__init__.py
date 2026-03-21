@@ -22,6 +22,18 @@ from data.universe import (
     SP500_UTILITIES,
     SP500_REAL_ESTATE,
     SP500_COMMUNICATION,
+    # Oil universe (RC-4)
+    OIL_MICROCAP_STOCKS,
+    OIL_FUTURES_PROXIES,
+    OIL_FOCUSED_UNIVERSE,
+    OIL_REFERENCE_PANEL,
+    OIL_BENCHMARKS,
+    OIL_TRADEABLE_UNIVERSE,
+    OIL_FULL_DOWNLOAD_UNIVERSE,
+    get_oil_universe,
+    get_oil_tradeable_tickers,
+    get_oil_reference_panel,
+    get_oil_benchmarks,
 )
 
 __all__ = [
@@ -52,4 +64,17 @@ __all__ = [
     "SP500_UTILITIES",
     "SP500_REAL_ESTATE",
     "SP500_COMMUNICATION",
+    
+    # Oil Universe (RC-4)
+    "OIL_MICROCAP_STOCKS",
+    "OIL_FUTURES_PROXIES",
+    "OIL_FOCUSED_UNIVERSE",
+    "OIL_REFERENCE_PANEL",
+    "OIL_BENCHMARKS",
+    "OIL_TRADEABLE_UNIVERSE",
+    "OIL_FULL_DOWNLOAD_UNIVERSE",
+    "get_oil_universe",
+    "get_oil_tradeable_tickers",
+    "get_oil_reference_panel",
+    "get_oil_benchmarks",
 ]

@@ -235,18 +235,74 @@ OIL_FUTURES_PROXIES = [
     "BNO",   # United States Brent Oil Fund (ETF proxy for Brent)
 ]
 
-# Combined oil-focused universe
+# Combined oil-focused universe (legacy — 8 tickers)
 OIL_FOCUSED_UNIVERSE = OIL_MICROCAP_STOCKS + OIL_FUTURES_PROXIES
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# OIL EXPANDED UNIVERSE — Tiered system for meaningful cross-sectional analysis
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def get_oil_universe() -> List[str]:
+# Reference panel — used for cross-sectional feature computation ONLY
+# These are never held in the portfolio, only provide sector context
+OIL_REFERENCE_PANEL = [
+    # Large-cap majors
+    "XOM", "CVX", "COP", "OXY", "EOG",
+    # Mid-cap E&P
+    "DVN", "APA", "FANG",
+    # Services
+    "SLB", "HAL", "BKR",
+    # Refiners
+    "MPC", "PSX", "VLO",
+    # Sector ETFs
+    "XLE", "XOP",
+]
+
+OIL_BENCHMARKS = [
+    "USO",   # United States Oil Fund (ETF proxy for WTI)
+    "BNO",   # United States Brent Oil Fund (ETF proxy for Brent)
+    "XLE",   # Energy Select Sector SPDR (primary sector benchmark)
+    "XOP",   # SPDR S&P Oil & Gas Exploration & Production ETF
+]
+
+# Tradeable universe: microcap stocks that the GP can actually hold
+OIL_TRADEABLE_UNIVERSE = OIL_MICROCAP_STOCKS
+
+# Full universe for data download: tradeable + reference panel + benchmarks
+# Reference panel provides cross-sectional context but is NOT traded
+OIL_FULL_DOWNLOAD_UNIVERSE = list(set(
+    OIL_TRADEABLE_UNIVERSE + OIL_REFERENCE_PANEL + OIL_BENCHMARKS
+))
+
+
+def get_oil_universe(expanded: bool = True) -> List[str]:
     """
     Get oil-focused universe for volatile oil market analysis.
     
+    Args:
+        expanded: If True, return full download universe (tradeable + reference + benchmarks).
+                  If False, return legacy 8-ticker universe for backward compatibility.
+    
     Returns:
-        List of 6 microcap oil stocks + 2 oil futures ETF proxies
+        List of oil tickers
     """
+    if expanded:
+        return OIL_FULL_DOWNLOAD_UNIVERSE
     return OIL_FOCUSED_UNIVERSE
+
+
+def get_oil_tradeable_tickers() -> List[str]:
+    """Get only the tradeable oil microcap tickers (portfolio holdings)."""
+    return OIL_TRADEABLE_UNIVERSE
+
+
+def get_oil_reference_panel() -> List[str]:
+    """Get reference panel tickers for cross-sectional feature computation."""
+    return OIL_REFERENCE_PANEL
+
+
+def get_oil_benchmarks() -> List[str]:
+    """Get oil benchmark tickers."""
+    return OIL_BENCHMARKS
 
 
 # Quick stats
@@ -254,7 +310,7 @@ if __name__ == "__main__":
     print(f"S&P 500 tickers: {len(SP500_FULL)}")
     print(f"MidCap additions: {len(SP400_MIDCAP)}")
     print(f"Total expanded universe: {len(EXPANDED_UNIVERSE)}")
-    print(f"Oil-focused universe: {len(OIL_FOCUSED_UNIVERSE)}")
+    print(f"Oil-focused universe (legacy): {len(OIL_FOCUSED_UNIVERSE)}")
     print(f"\nBy sector:")
     for name, tickers in [
         ("Technology", SP500_TECHNOLOGY),
@@ -270,6 +326,9 @@ if __name__ == "__main__":
         ("Communication", SP500_COMMUNICATION),
     ]:
         print(f"  {name}: {len(tickers)}")
-    print(f"\nOil Focus:")
-    print(f"  Microcap Stocks: {len(OIL_MICROCAP_STOCKS)}")
-    print(f"  Futures Proxies: {len(OIL_FUTURES_PROXIES)}")
+    print(f"\nOil Focus (Expanded):")
+    print(f"  Tradeable (microcap): {len(OIL_TRADEABLE_UNIVERSE)}")
+    print(f"  Reference Panel:      {len(OIL_REFERENCE_PANEL)}")
+    print(f"  Benchmarks:           {len(OIL_BENCHMARKS)}")
+    print(f"  Full Download:        {len(OIL_FULL_DOWNLOAD_UNIVERSE)}")
+    print(f"  Legacy (8 tickers):   {len(OIL_FOCUSED_UNIVERSE)}")

@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 import uuid
 import random
 import copy
+import hashlib
 from abc import ABC, abstractmethod
+from functools import lru_cache
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -187,7 +189,7 @@ class UnaryOpNode(Node):
         'sigmoid': lambda x: 1 / (1 + np.exp(-x.clip(-10, 10))),
         'tanh': lambda x: np.tanh(x),
         'rank': lambda x: x.rank(pct=True),
-        'zscore': lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x * 0,
+        'zscore': lambda x: ((x - x.mean()) / x.std()).fillna(0) if not isinstance(x.std(), pd.Series) and x.std() > 0 else x * 0,
     }
     
     def __init__(self, op: str, child: Node):
@@ -528,6 +530,11 @@ class FeatureLibrary:
         if self.enable_oil:
             from evolution.oil_specific_features import OilSpecificFeatures
             self.oil_features = OilSpecificFeatures()
+        
+        # Feature cache for performance optimization
+        self._feature_cache = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
     
     def _build_feature_specs(self) -> Dict:
         """Build all feature specifications."""
@@ -808,14 +815,62 @@ class FeatureLibrary:
         
         return categories
     
+    def _make_cache_key(self, prices: pd.DataFrame, lag: int, rank_transform: bool) -> str:
+        """Create a hashable cache key from prices DataFrame."""
+        # Use last date, shape, and column hash as key
+        last_date = str(prices.index[-1]) if len(prices) > 0 else "empty"
+        shape_str = f"{len(prices)}x{len(prices.columns)}"
+        cols_hash = hashlib.md5(','.join(sorted(prices.columns)).encode()).hexdigest()[:8]
+        return f"{last_date}_{shape_str}_{cols_hash}_lag{lag}_rank{rank_transform}"
+    
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Get cache statistics."""
+        total = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total * 100) if total > 0 else 0
+        return {
+            'hits': self._cache_hits,
+            'misses': self._cache_misses,
+            'total': total,
+            'hit_rate': hit_rate,
+            'cache_size': len(self._feature_cache)
+        }
+    
+    def clear_cache(self):
+        """Clear feature cache and reset statistics."""
+        self._feature_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+    
     def compute_all(
-        self, 
-        prices: pd.DataFrame, 
+        self,
+        prices: pd.DataFrame,
         volume: pd.DataFrame = None,
         lag: int = 1,
-        rank_transform: bool = True,  # New parameter
+        rank_transform: bool = True,
+        use_cache: bool = True,
     ) -> Dict[str, pd.Series]:
-        """Compute all features."""
+        """
+        Compute all features with optional caching.
+        
+        Args:
+            prices: Price DataFrame
+            volume: Volume DataFrame (optional)
+            lag: Lag for feature computation
+            rank_transform: Apply rank transformation
+            use_cache: Enable feature caching (default: True)
+        
+        Returns:
+            Dict mapping feature names to Series
+        """
+        # Check cache first
+        if use_cache:
+            cache_key = self._make_cache_key(prices, lag, rank_transform)
+            if cache_key in self._feature_cache:
+                self._cache_hits += 1
+                return self._feature_cache[cache_key].copy()
+            self._cache_misses += 1
+        
+        # Compute features
         if lag > 0 and len(prices) > lag:
             lagged_prices = prices.iloc[:-lag]
             lagged_volume = volume.iloc[:-lag] if volume is not None else None
@@ -835,6 +890,15 @@ class FeatureLibrary:
         if rank_transform:
             features = self._rank_transform(features)
         
+        # Cache the result
+        if use_cache:
+            # Limit cache size to prevent memory issues (keep last 1000 entries)
+            if len(self._feature_cache) >= 1000:
+                # Remove oldest entry (FIFO)
+                oldest_key = next(iter(self._feature_cache))
+                del self._feature_cache[oldest_key]
+            self._feature_cache[cache_key] = features.copy()
+        
         return features
     
     def _rank_transform(self, features: Dict[str, pd.Series]) -> Dict[str, pd.Series]:
@@ -846,7 +910,14 @@ class FeatureLibrary:
                 ranked[name] = series
                 continue
             
-            if series.empty or series.isna().all():
+            # Guard: if a feature accidentally returned a DataFrame, squeeze to Series
+            if isinstance(series, pd.DataFrame):
+                if series.shape[1] == 1:
+                    series = series.iloc[:, 0]
+                else:
+                    series = series.iloc[:, 0]  # Take first column as fallback
+            
+            if series.empty or bool(series.isna().all()):
                 ranked[name] = series
                 continue
             
@@ -1537,19 +1608,57 @@ class FeatureLibrary:
                 return pd.Series(0.0, index=tickers)
             
             feature_name = spec[1]
-            # Get date range for oil data fetching
-            start_date = prices.index[0] if len(prices) > 0 else None
-            end_date = prices.index[-1] if len(prices) > 0 else None
             
-            if start_date and end_date:
-                oil_results = self.oil_features.calculate_all_features(
-                    prices, volume, start_date, end_date
-                )
-                
-                if feature_name in oil_results:
-                    return oil_results[feature_name]
+            if len(prices) == 0:
+                return pd.Series(0.0, index=tickers)
             
-            return pd.Series(0.0, index=tickers)
+            # RC-4 FIX: The oil feature integration was broken — calculate_all_features()
+            # expects (stock_prices: pd.Series, oil_market_data: OilMarketData) but was
+            # being called with (prices, volume, start_date, end_date).
+            #
+            # Lazy-load oil market data (cached per date range)
+            if not hasattr(self, '_oil_market_data') or self._oil_market_data is None:
+                try:
+                    from evolution.oil_specific_features import OilMarketData
+                    # Use USO as WTI proxy, BNO as Brent proxy if available in prices
+                    wti_proxy = prices['USO'] if 'USO' in prices.columns else prices.iloc[:, 0]
+                    brent_proxy = prices['BNO'] if 'BNO' in prices.columns else wti_proxy
+                    
+                    self._oil_market_data = OilMarketData(
+                        wti_price=wti_proxy,
+                        brent_price=brent_proxy,
+                        inventory=None,
+                        refinery_utilization=None,
+                        gasoline_price=None,
+                        diesel_price=None,
+                    )
+                except Exception:
+                    self._oil_market_data = None
+            
+            if self._oil_market_data is None:
+                return pd.Series(0.0, index=tickers)
+            
+            # Calculate per-ticker oil features
+            results = {}
+            for ticker in tickers:
+                try:
+                    if ticker in prices.columns:
+                        ticker_features = self.oil_features.calculate_all_features(
+                            stock_prices=prices[ticker],
+                            oil_market_data=self._oil_market_data
+                        )
+                        # Get the last value of the feature series
+                        if feature_name in ticker_features:
+                            feat_val = ticker_features[feature_name]
+                            results[ticker] = feat_val.iloc[-1] if hasattr(feat_val, 'iloc') and len(feat_val) > 0 else 0.0
+                        else:
+                            results[ticker] = 0.0
+                    else:
+                        results[ticker] = 0.0
+                except Exception:
+                    results[ticker] = 0.0
+            
+            return pd.Series(results)
         
         # Default
         return pd.Series(0.0, index=tickers)
@@ -1623,6 +1732,7 @@ def calculate_fitness(
     # Win rate = fraction of periods beating benchmark
     win_rate = sum(1 for e in excess_returns if e > 0) / n
     worst_return = min(returns)
+    worst_dd = max(r.get('max_drawdown', 0) for r in period_results)
     
     # Information ratio
     if n > 1:
@@ -1632,45 +1742,77 @@ def calculate_fitness(
         ir = 0
     
     # ═══════════════════════════════════════════════════════════════
-    # COMPONENTS - all centered around zero for benchmark-matching
+    # SHARPE COMPONENT
+    # Excess Sharpe component: 0.5 excess Sharpe = full score of 1.0
     # ═══════════════════════════════════════════════════════════════
     
-    # Excess Sharpe component: 0.5 excess Sharpe = full score of 1.0
     sharpe_component = np.clip(avg_excess_sharpe / 0.5, -1, 1)
     
     # Penalize variance in Sharpe
     sharpe_variance_penalty = min(sharpe_std / 1.0, 0.3)
     sharpe_component -= sharpe_variance_penalty
     
+    # ═══════════════════════════════════════════════════════════════
+    # RETURN COMPONENT
     # Excess return component: 10% annual excess = full score
+    # ═══════════════════════════════════════════════════════════════
+    
     return_component = np.clip(avg_excess_return / 0.10, -1, 1)
     
     # Information ratio bonus: IR of 0.5 = full bonus
     ir_bonus = np.clip(ir / 0.5, -0.5, 0.5)
     return_component = 0.7 * return_component + 0.3 * ir_bonus
     
-    # Stability: win rate vs benchmark, penalize catastrophic periods
-    stability_component = (win_rate - 0.5) * 2  # 50% win rate = 0, 100% = 1
+    # ═══════════════════════════════════════════════════════════════
+    # STABILITY COMPONENT
+    # Penalties are explicitly weighted so their sum is bounded to 1.0,
+    # preserving gradient signal across the full [-1, 1] range.
+    # ═══════════════════════════════════════════════════════════════
     
-    if worst_return < -0.20:
-        stability_component -= 0.5
-    elif worst_return < -0.10:
-        stability_component -= 0.2
+    # Win rate baseline: 50% = 0, 100% = 1, 0% = -1
+    stability_component = (win_rate - 0.5) * 2
     
+    # Drawdown penalty (weight: 0.50)
+    if worst_dd > 0.35:
+        dd_penalty = 1.0   # near-disqualifying
+    elif worst_dd > 0.25:
+        dd_penalty = 0.6
+    elif worst_dd > 0.15:
+        dd_penalty = 0.2
+    else:
+        dd_penalty = 0.0
+    
+    # Worst period return penalty (weight: 0.25)
+    return_penalty = 0.3 if worst_return < -0.20 else 0.0
+    
+    # Consistency penalty: high variance in excess returns (weight: 0.25)
+    excess_return_std = np.std(excess_returns)
+    consistency_penalty = np.clip(excess_return_std / 0.20, 0, 0.4)
+    
+    # Combine with explicit weights — max total penalty = 1.0
+    stability_component -= (
+        0.50 * dd_penalty +
+        0.25 * return_penalty +
+        0.25 * consistency_penalty
+    )
     stability_component = np.clip(stability_component, -1, 1)
     
-    # Cost penalty based on actual turnover drag
+    # ═══════════════════════════════════════════════════════════════
+    # COST PENALTY
+    # ═══════════════════════════════════════════════════════════════
+    
     annual_cost_drag = avg_turnover * 12 * transaction_cost * 2
     cost_penalty = np.clip(annual_cost_drag / 0.03, 0, 1)  # 3% drag = full penalty
     
     # ═══════════════════════════════════════════════════════════════
     # TOTAL - zero means "matches benchmark"
+    # Positive = beats benchmark, Negative = loses to benchmark
     # ═══════════════════════════════════════════════════════════════
     
     total = (
-        0.35 * sharpe_component +
-        0.30 * return_component +
-        0.20 * stability_component -
+        0.30 * sharpe_component +
+        0.25 * return_component +
+        0.30 * stability_component -
         0.15 * cost_penalty
     )
     
@@ -1678,8 +1820,259 @@ def calculate_fitness(
     if n < 4:
         total *= n / 4
     
-    # NO RESCALING - keep it centered at zero
-    # Positive = beats benchmark, Negative = loses to benchmark
+    total = np.clip(total, -1, 1)
+    
+    return FitnessResult(
+        total=total,
+        sharpe_component=sharpe_component,
+        return_component=return_component,
+        stability_component=stability_component,
+        cost_penalty=cost_penalty,
+        avg_sharpe=avg_sharpe,
+        sharpe_std=sharpe_std,
+        avg_return=avg_return,
+        return_std=return_std,
+        avg_turnover=avg_turnover,
+        win_rate=win_rate,
+        worst_period_return=worst_return,
+        information_ratio=ir,
+        n_periods=n,
+        period_results=period_results
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FITNESS FUNCTION v2 — RC-3: Recency Weighting + Universe-Adaptive Penalties
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _recency_weighted_mean(values: List[float], half_life_periods: int = 4) -> float:
+    """
+    Exponentially-weighted mean giving more weight to recent periods.
+    
+    Args:
+        values: List of per-period values (oldest first, most recent last)
+        half_life_periods: Number of periods for weight to decay by half
+        
+    Returns:
+        Weighted mean
+    """
+    n = len(values)
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return values[0]
+    
+    decay = np.log(2) / max(half_life_periods, 1)
+    weights = np.array([np.exp(-decay * (n - 1 - i)) for i in range(n)])
+    weights /= weights.sum()
+    
+    return float(np.dot(values, weights))
+
+
+def _get_drawdown_thresholds(universe_type: str) -> Dict[str, float]:
+    """
+    Get drawdown penalty thresholds based on universe characteristics.
+    
+    Oil microcaps routinely hit 40%+ drawdowns, so the thresholds must be
+    calibrated differently than for large-cap S&P 500 stocks.
+    
+    Args:
+        universe_type: One of 'general', 'oil_microcap', 'oil_largecap'
+        
+    Returns:
+        Dict with 'severe', 'moderate', 'mild' thresholds
+    """
+    if universe_type == 'oil_microcap':
+        return {
+            'severe': 0.50,    # Was 0.35 — oil microcaps routinely hit 40%+
+            'moderate': 0.35,  # Was 0.25
+            'mild': 0.20,      # Was 0.15
+        }
+    elif universe_type == 'oil_largecap':
+        return {
+            'severe': 0.40,
+            'moderate': 0.30,
+            'mild': 0.20,
+        }
+    else:  # general / S&P 500
+        return {
+            'severe': 0.35,
+            'moderate': 0.25,
+            'mild': 0.15,
+        }
+
+
+def calculate_fitness_v2(
+    period_results: List[Dict],
+    benchmark_results: List[Dict],
+    transaction_cost: float = 0.002,
+    recency_half_life: int = 4,
+    universe_type: str = 'general',
+) -> FitnessResult:
+    """
+    Enhanced fitness with recency weighting and universe-adaptive penalties.
+    
+    Improvements over calculate_fitness():
+    - Recency-weighted means instead of simple means (recent periods matter more)
+    - Universe-adaptive drawdown thresholds (oil microcaps get wider thresholds)
+    - Blended Sharpe + Calmar scoring for multi-objective optimization
+    
+    Args:
+        period_results: List of per-period performance dicts
+        benchmark_results: List of benchmark performance dicts
+        transaction_cost: Per-trade transaction cost
+        recency_half_life: Half-life for recency weighting (in periods)
+        universe_type: 'general', 'oil_microcap', or 'oil_largecap'
+        
+    Returns:
+        FitnessResult with fitness score and components
+    """
+    if not period_results or not benchmark_results:
+        return FitnessResult(
+            total=0, sharpe_component=0, return_component=0,
+            stability_component=0, cost_penalty=0, avg_sharpe=0,
+            sharpe_std=0, avg_return=0, return_std=0, avg_turnover=0,
+            win_rate=0, worst_period_return=-1, information_ratio=0,
+            n_periods=0, period_results=[]
+        )
+    
+    n = len(period_results)
+    
+    # Extract metrics
+    sharpes = [r['sharpe_ratio'] for r in period_results]
+    returns = [r['total_return'] for r in period_results]
+    turnovers = [r.get('turnover', 0) for r in period_results]
+    
+    bench_returns = [b.get('total_return', 0) for b in benchmark_results[:n]]
+    bench_sharpes = [b.get('sharpe_ratio', 0) for b in benchmark_results[:n]]
+    
+    # EXCESS metrics (strategy minus benchmark)
+    excess_returns = [r - b for r, b in zip(returns, bench_returns)]
+    excess_sharpes = [s - b for s, b in zip(sharpes, bench_sharpes)]
+    
+    avg_sharpe = np.mean(sharpes)
+    sharpe_std = np.std(sharpes) if n > 1 else 0
+    avg_return = np.mean(returns)
+    return_std = np.std(returns) if n > 1 else 0
+    avg_turnover = np.mean(turnovers)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # RECENCY-WEIGHTED MEANS (RC-3 enhancement)
+    # ═══════════════════════════════════════════════════════════════
+    avg_excess_return = _recency_weighted_mean(excess_returns, recency_half_life)
+    avg_excess_sharpe = _recency_weighted_mean(excess_sharpes, recency_half_life)
+    
+    # Win rate = fraction of periods beating benchmark
+    win_rate = sum(1 for e in excess_returns if e > 0) / n
+    worst_return = min(returns)
+    worst_dd = max(r.get('max_drawdown', 0) for r in period_results)
+    
+    # Information ratio (recency-weighted)
+    if n > 1:
+        excess_std = np.std(excess_returns)
+        ir = avg_excess_return / excess_std if excess_std > 0 else 0
+    else:
+        ir = 0
+    
+    # ═══════════════════════════════════════════════════════════════
+    # SHARPE COMPONENT (same structure, recency-weighted input)
+    # ═══════════════════════════════════════════════════════════════
+    
+    sharpe_component = np.clip(avg_excess_sharpe / 0.5, -1, 1)
+    
+    # Penalize variance in Sharpe
+    sharpe_variance_penalty = min(sharpe_std / 1.0, 0.3)
+    sharpe_component -= sharpe_variance_penalty
+    
+    # ═══════════════════════════════════════════════════════════════
+    # CALMAR COMPONENT (NEW — blended with Sharpe for multi-objective)
+    # ═══════════════════════════════════════════════════════════════
+    
+    # Calculate per-period Calmar ratios
+    calmars = []
+    bench_calmars = []
+    for i in range(n):
+        ret = returns[i]
+        dd = max(period_results[i].get('max_drawdown', 0.01), 0.01)
+        ann_ret = (1 + ret) ** 4 - 1  # Annualize from quarterly
+        calmars.append(ann_ret / dd)
+        
+        b_ret = bench_returns[i]
+        b_dd = max(benchmark_results[i].get('max_drawdown', 0.01), 0.01)
+        b_ann_ret = (1 + b_ret) ** 4 - 1
+        bench_calmars.append(b_ann_ret / b_dd)
+    
+    excess_calmars = [c - b for c, b in zip(calmars, bench_calmars)]
+    avg_excess_calmar = _recency_weighted_mean(excess_calmars, recency_half_life)
+    calmar_component = np.clip(avg_excess_calmar / 1.0, -1, 1)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # RETURN COMPONENT (recency-weighted)
+    # ═══════════════════════════════════════════════════════════════
+    
+    return_component = np.clip(avg_excess_return / 0.10, -1, 1)
+    
+    # Information ratio bonus
+    ir_bonus = np.clip(ir / 0.5, -0.5, 0.5)
+    return_component = 0.7 * return_component + 0.3 * ir_bonus
+    
+    # ═══════════════════════════════════════════════════════════════
+    # STABILITY COMPONENT — UNIVERSE-ADAPTIVE PENALTIES (RC-3)
+    # ═══════════════════════════════════════════════════════════════
+    
+    stability_component = (win_rate - 0.5) * 2
+    
+    # Universe-adaptive drawdown thresholds
+    dd_thresholds = _get_drawdown_thresholds(universe_type)
+    
+    if worst_dd > dd_thresholds['severe']:
+        dd_penalty = 1.0
+    elif worst_dd > dd_thresholds['moderate']:
+        dd_penalty = 0.6
+    elif worst_dd > dd_thresholds['mild']:
+        dd_penalty = 0.2
+    else:
+        dd_penalty = 0.0
+    
+    # Worst period return penalty (also universe-adaptive)
+    worst_return_threshold = -0.30 if universe_type.startswith('oil') else -0.20
+    return_penalty = 0.3 if worst_return < worst_return_threshold else 0.0
+    
+    # Consistency penalty
+    excess_return_std = np.std(excess_returns)
+    consistency_threshold = 0.30 if universe_type.startswith('oil') else 0.20
+    consistency_penalty = np.clip(excess_return_std / consistency_threshold, 0, 0.4)
+    
+    stability_component -= (
+        0.50 * dd_penalty +
+        0.25 * return_penalty +
+        0.25 * consistency_penalty
+    )
+    stability_component = np.clip(stability_component, -1, 1)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # COST PENALTY
+    # ═══════════════════════════════════════════════════════════════
+    
+    annual_cost_drag = avg_turnover * 12 * transaction_cost * 2
+    cost_penalty = np.clip(annual_cost_drag / 0.03, 0, 1)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # TOTAL — Blended Sharpe + Calmar (multi-objective)
+    # ═══════════════════════════════════════════════════════════════
+    
+    total = (
+        0.25 * sharpe_component +      # Risk-adjusted returns (Sharpe)
+        0.20 * calmar_component +       # Drawdown-adjusted returns (Calmar)
+        0.20 * return_component +       # Absolute excess returns
+        0.20 * stability_component -    # Consistency & win rate
+        0.15 * cost_penalty             # Transaction costs
+    )
+    
+    # Period count adjustment
+    if n < 4:
+        total *= n / 4
+    
     total = np.clip(total, -1, 1)
     
     return FitnessResult(
@@ -1831,6 +2224,12 @@ class WalkForwardEvaluator:
         stop_manager = None,
         position_sizer = None,
         use_calmar_fitness: bool = False,
+        # RC-3: Fitness v2 parameters
+        universe_type: str = 'general',
+        recency_half_life: int = 4,
+        use_fitness_v2: bool = False,
+        # RC-4: Oil reference panel — tickers to exclude from portfolio selection
+        tradeable_tickers: Optional[List[str]] = None,
     ):
         self.prices = prices
         self.periods = periods
@@ -1843,6 +2242,15 @@ class WalkForwardEvaluator:
         self.stop_manager = stop_manager
         self.position_sizer = position_sizer
         self.use_calmar_fitness = use_calmar_fitness
+        
+        # RC-3: Fitness v2 parameters
+        self.universe_type = universe_type
+        self.recency_half_life = recency_half_life
+        self.use_fitness_v2 = use_fitness_v2
+        
+        # RC-4: If tradeable_tickers is set, only these tickers can be held
+        # (reference panel tickers are used for features but not traded)
+        self.tradeable_tickers = tradeable_tickers
     
     def evaluate_strategy(self, strategy: GPStrategy) -> FitnessResult:
         """Evaluate strategy across all periods."""
@@ -1857,8 +2265,17 @@ class WalkForwardEvaluator:
         # Use pre-computed benchmarks, sliced to match period count
         benchmarks = self.benchmark_results[:len(period_results)]
         
+        # RC-3: Use fitness v2 with recency weighting + universe-adaptive penalties
+        if self.use_fitness_v2:
+            return calculate_fitness_v2(
+                period_results,
+                benchmarks,
+                transaction_cost=self.transaction_cost,
+                recency_half_life=self.recency_half_life,
+                universe_type=self.universe_type,
+            )
         # Use Calmar fitness if enabled (Priority 2.4)
-        if self.use_calmar_fitness:
+        elif self.use_calmar_fitness:
             from evolution.fitness_calmar import calculate_calmar_fitness
             return calculate_calmar_fitness(
                 period_results,
@@ -1903,10 +2320,34 @@ class WalkForwardEvaluator:
                 date_idx = available_prices.index.get_loc(date)
                 prices_to_date = available_prices.iloc[:date_idx + 1]
                 
-                new_positions, turnover = strategy.select_stocks(
-                    prices_to_date,
-                    current_positions
-                )
+                # RC-4: Score ALL tickers (including reference panel for cross-sectional context)
+                # but only select from tradeable tickers for the portfolio
+                if self.tradeable_tickers:
+                    # Score using full universe (reference panel provides context)
+                    scores = strategy.score_stocks(prices_to_date)
+                    # Filter to only tradeable tickers
+                    tradeable_in_prices = [t for t in self.tradeable_tickers if t in scores.index]
+                    if tradeable_in_prices:
+                        tradeable_scores = scores[tradeable_in_prices]
+                        n_select = max(1, int(len(tradeable_scores) * strategy.top_pct / 100))
+                        new_positions = tradeable_scores.nlargest(n_select).index.tolist()
+                        
+                        if current_positions:
+                            current_set = set(current_positions)
+                            new_set = set(new_positions)
+                            exited = len(current_set - new_set)
+                            entered = len(new_set - current_set)
+                            turnover = (exited + entered) / (2 * max(len(current_set), len(new_set), 1))
+                        else:
+                            turnover = 1.0
+                    else:
+                        new_positions = []
+                        turnover = 0.0
+                else:
+                    new_positions, turnover = strategy.select_stocks(
+                        prices_to_date,
+                        current_positions
+                    )
                 
                 turnovers.append(turnover)
                 current_positions = new_positions
@@ -1956,6 +2397,63 @@ class WalkForwardEvaluator:
         }
         
         return result
+    
+    def to_config(self) -> Dict[str, Any]:
+        """Serialize evaluator to picklable config dict."""
+        return {
+            'prices': self.prices,
+            'periods': self.periods,
+            'benchmark_results': self.benchmark_results,
+            'transaction_cost': self.transaction_cost,
+            'rebalance_frequency': self.rebalance_frequency,
+            'rebalancer': self.rebalancer,
+            'stop_manager': self.stop_manager,
+            'position_sizer': self.position_sizer,
+            'use_calmar_fitness': self.use_calmar_fitness,
+            # RC-3
+            'universe_type': self.universe_type,
+            'recency_half_life': self.recency_half_life,
+            'use_fitness_v2': self.use_fitness_v2,
+            # RC-4
+            'tradeable_tickers': self.tradeable_tickers,
+        }
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> 'WalkForwardEvaluator':
+        """Deserialize evaluator from config dict."""
+        return cls(**config)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PARALLEL EVALUATION SUPPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def evaluate_strategy_parallel(args: Tuple[GPStrategy, Dict[str, Any]]) -> Tuple[str, float, List[Dict]]:
+    """
+    Module-level function for parallel strategy evaluation.
+    
+    This function is picklable and can be used with multiprocessing.Pool.
+    
+    Args:
+        args: Tuple of (strategy, evaluator_config)
+    
+    Returns:
+        Tuple of (strategy_id, fitness, period_results)
+    """
+    strategy, evaluator_config = args
+    
+    # Reconstruct evaluator from config
+    evaluator = WalkForwardEvaluator.from_config(evaluator_config)
+    
+    # Evaluate strategy
+    fitness_result = evaluator.evaluate_strategy(strategy)
+    
+    # Update strategy in-place
+    strategy.period_metrics = fitness_result.period_results
+    strategy.fitness = fitness_result.total
+    
+    return (strategy.strategy_id, fitness_result.total, fitness_result.period_results)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # POPULATION MANAGEMENT

@@ -14,6 +14,7 @@ echo "  Date Range: 2024-01-01 to present"
 echo "  Population: 20"
 echo "  Generations: 5"
 echo "  Timeframe: weekly"
+echo "  Parallel Workers: Auto-detect"
 echo ""
 echo "⏱️  Expected Runtime: ~5 minutes"
 echo ""
@@ -27,6 +28,7 @@ python3 arena_runner_v3.py \
     --train-months 6 \
     --test-months 2 \
     --step-months 2 \
+    --parallel-workers -1 \
     --enable-smc \
     --enable-sr \
     --enable-oil \
@@ -42,5 +44,5 @@ echo "📊 View results:"
 echo "   python3 ui/strategy_picker.py"
 echo ""
 echo "🚀 Run full evolution:"
-echo "   bash run_arena.sh"
+echo "   bash run_arena_oil.sh"
 echo ""

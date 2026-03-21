@@ -10,10 +10,12 @@ echo "╚═══════════════════════�
 echo ""
 echo "📈 General Stocks Configuration:"
 echo "  Tickers: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA"
-echo "  Date Range: 2023-01-01 to present"
+echo "  Date Range: 2020-01-01 to present"
 echo "  Population: 50"
 echo "  Generations: 30"
 echo "  Timeframe: weekly"
+echo "  Walk-Forward: 12mo train / 3mo test / 3mo step"
+echo "  Parallel Workers: Auto-detect"
 echo ""
 echo "🎯 Advanced Features:"
 echo "  ✓ Smart Money Concepts"
@@ -44,13 +46,15 @@ echo ""
 
 python3 arena_runner_v3.py \
     --tickers AAPL MSFT GOOGL AMZN NVDA META TSLA \
-    --start 2023-01-01 \
+    --start 2020-01-01 \
     --population 50 \
     --generations 30 \
     --timeframe weekly \
+    --max-depth 5 \
     --train-months 12 \
     --test-months 3 \
     --step-months 3 \
+    --parallel-workers -1 \
     --enable-smc \
     --enable-sr \
     --enable-regime \
