@@ -294,6 +294,7 @@ class GPEvolutionArena:
         universe_type: str = None,  # Auto-detected if None
         recency_half_life: int = None,  # Uses config default if None
         use_fitness_v2: bool = False,
+        use_feature_cache: bool = True,
     ):
         self.start_date = start_date
         self.end_date = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -327,6 +328,7 @@ class GPEvolutionArena:
         # RC-3: Fitness v2 parameters
         self.recency_half_life = recency_half_life or RECENCY_HALF_LIFE
         self.use_fitness_v2 = use_fitness_v2
+        self.use_feature_cache = use_feature_cache
         
         # Performance optimization
         # If parallel_workers is 0, use sequential (1 worker)
@@ -603,7 +605,7 @@ class GPEvolutionArena:
         Replaces the placeholder with a proper FeaturePrecomputeCache that
         computes features for all rebalance dates across all walk-forward periods.
         """
-        if ENABLE_FEATURE_CACHE and hasattr(self.feature_lib, 'compute_all'):
+        if self.use_feature_cache and ENABLE_FEATURE_CACHE and hasattr(self.feature_lib, 'compute_all'):
             print_status("Pre-computing features for all rebalance dates (RC-5)...", "progress")
             try:
                 from evolution.feature_cache import FeaturePrecomputeCache
@@ -1153,6 +1155,8 @@ def main():
                        help='Universe type for fitness penalty calibration (auto-detected if not set)')
     parser.add_argument('--recency-half-life', type=int, default=None,
                        help='Recency weighting half-life in periods (default: 4 = 1 year with quarterly steps)')
+    parser.add_argument('--no-feature-cache', action='store_true',
+                   help='Disable feature pre-computation cache (on-demand mode)')
 
     args = parser.parse_args()
     
@@ -1209,6 +1213,7 @@ def main():
         universe_type=args.universe_type,
         recency_half_life=args.recency_half_life,
         use_fitness_v2=args.use_fitness_v2,
+        use_feature_cache=not args.no_feature_cache
     )
 
     arena.run(

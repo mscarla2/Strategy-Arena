@@ -360,6 +360,7 @@ class TestFeaturePrecomputeCache:
             volume=None,
             periods=periods,
             rebalance_frequency=21,
+            persist_to_disk=False,
         )
         
         assert len(cache.cache) > 0
@@ -385,6 +386,7 @@ class TestFeaturePrecomputeCache:
             volume=None,
             periods=periods,
             rebalance_frequency=21,
+            persist_to_disk=False,
         )
         
         # Query a cached date
@@ -414,6 +416,7 @@ class TestFeaturePrecomputeCache:
             volume=None,
             periods=periods,
             rebalance_frequency=21,
+            persist_to_disk=False,
         )
         
         result = cache.get_features("1999-01-01")
@@ -443,6 +446,7 @@ class TestFeaturePrecomputeCache:
             volume=None,
             periods=periods,
             rebalance_frequency=21,
+            persist_to_disk=False,
         )
         
         stats = cache.stats
@@ -450,6 +454,237 @@ class TestFeaturePrecomputeCache:
         assert stats['cached_dates'] > 0
         assert stats['hits'] == 0
         assert stats['misses'] == 0
+
+
+class TestFeatureCacheDiskPersistence:
+    """Test disk persistence of FeaturePrecomputeCache."""
+    
+    @staticmethod
+    def _make_mock_prices(n_days=500, n_tickers=5):
+        dates = pd.bdate_range('2023-01-01', periods=n_days)
+        tickers = [f"TICK{i}" for i in range(n_tickers)]
+        np.random.seed(42)
+        data = {t: 100 * np.cumprod(1 + np.random.normal(0.0005, 0.02, n_days)) for t in tickers}
+        return pd.DataFrame(data, index=dates)
+    
+    @staticmethod
+    def _make_mock_periods(prices):
+        dates = prices.index
+        mid = len(dates) // 2
+        return [(
+            dates[0].strftime("%Y-%m-%d"),
+            dates[mid].strftime("%Y-%m-%d"),
+            dates[mid].strftime("%Y-%m-%d"),
+            dates[-1].strftime("%Y-%m-%d"),
+        )]
+    
+    @staticmethod
+    def _mock_feature_lib():
+        class MockFeatureLib:
+            feature_names = ['feat_a', 'feat_b']
+            max_lookback = 252
+            call_count = 0
+            
+            def compute_all(self, prices, volume=None, lag=1, rank_transform=True):
+                MockFeatureLib.call_count += 1
+                return {
+                    'feat_a': pd.Series(0.5, index=prices.columns),
+                    'feat_b': pd.Series(0.3, index=prices.columns),
+                }
+        return MockFeatureLib()
+    
+    def test_disk_save_and_load(self, tmp_path):
+        """Features should be saved to disk and loaded on next instantiation."""
+        from evolution.feature_cache import FeaturePrecomputeCache
+        
+        prices = self._make_mock_prices()
+        periods = self._make_mock_periods(prices)
+        lib = self._mock_feature_lib()
+        
+        # Run 1 — compute and save to disk
+        cache1 = FeaturePrecomputeCache(
+            feature_lib=lib,
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        assert cache1.stats['disk_saves'] > 0
+        assert cache1.stats['disk_loads'] == 0
+        n_dates = cache1.stats['cached_dates']
+        assert n_dates > 0
+        
+        # Parquet files should exist on disk
+        universe_dir = list(tmp_path.iterdir())[0]  # the hash-named subdirectory
+        parquet_files = list(universe_dir.glob("*.parquet"))
+        assert len(parquet_files) == n_dates
+    
+    def test_second_run_loads_from_disk(self, tmp_path):
+        """Second run with same universe should load from disk, not recompute."""
+        from evolution.feature_cache import FeaturePrecomputeCache
+        
+        prices = self._make_mock_prices()
+        periods = self._make_mock_periods(prices)
+        
+        lib1 = self._mock_feature_lib()
+        lib1.__class__.call_count = 0
+        
+        # Run 1 — compute everything
+        cache1 = FeaturePrecomputeCache(
+            feature_lib=lib1,
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        compute_calls_run1 = lib1.__class__.call_count
+        n_dates = cache1.stats['cached_dates']
+        
+        # Run 2 — should load from disk
+        lib2 = self._mock_feature_lib()
+        lib2.__class__.call_count = 0
+        
+        cache2 = FeaturePrecomputeCache(
+            feature_lib=lib2,
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        assert cache2.stats['disk_loads'] == n_dates, \
+            f"Expected {n_dates} disk loads, got {cache2.stats['disk_loads']}"
+        assert cache2.stats['disk_saves'] == 0, \
+            "Should not save anything on second run"
+        assert lib2.__class__.call_count == 0, \
+            f"compute_all should not be called on second run, but was called {lib2.__class__.call_count} times"
+        assert cache2.stats['cached_dates'] == n_dates
+    
+    def test_disk_data_matches_computed(self, tmp_path):
+        """Features loaded from disk should match originally computed values."""
+        from evolution.feature_cache import FeaturePrecomputeCache
+        
+        prices = self._make_mock_prices()
+        periods = self._make_mock_periods(prices)
+        
+        # Run 1
+        cache1 = FeaturePrecomputeCache(
+            feature_lib=self._mock_feature_lib(),
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        # Run 2
+        cache2 = FeaturePrecomputeCache(
+            feature_lib=self._mock_feature_lib(),
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        # Compare all cached dates
+        for date_key in cache1.cache:
+            assert date_key in cache2.cache, f"Date {date_key} missing from run 2"
+            for feat_name in cache1.cache[date_key]:
+                pd.testing.assert_series_equal(
+                    cache1.cache[date_key][feat_name],
+                    cache2.cache[date_key][feat_name],
+                    check_names=False,
+                )
+    
+    def test_clear_disk_cache(self, tmp_path):
+        """clear_disk_cache should remove all parquet files."""
+        from evolution.feature_cache import FeaturePrecomputeCache
+        
+        prices = self._make_mock_prices()
+        periods = self._make_mock_periods(prices)
+        
+        cache = FeaturePrecomputeCache(
+            feature_lib=self._mock_feature_lib(),
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        # Files should exist
+        universe_dir = list(tmp_path.iterdir())[0]
+        assert len(list(universe_dir.glob("*.parquet"))) > 0
+        
+        # Clear
+        cache.clear_disk_cache()
+        assert len(list(universe_dir.glob("*.parquet"))) == 0
+    
+    def test_different_universe_gets_separate_cache(self, tmp_path):
+        """Different ticker universes should not share disk cache."""
+        from evolution.feature_cache import FeaturePrecomputeCache
+        
+        prices_a = self._make_mock_prices(n_tickers=3)
+        prices_b = self._make_mock_prices(n_tickers=7)
+        periods_a = self._make_mock_periods(prices_a)
+        periods_b = self._make_mock_periods(prices_b)
+        
+        cache_a = FeaturePrecomputeCache(
+            feature_lib=self._mock_feature_lib(),
+            prices=prices_a,
+            volume=None,
+            periods=periods_a,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        cache_b = FeaturePrecomputeCache(
+            feature_lib=self._mock_feature_lib(),
+            prices=prices_b,
+            volume=None,
+            periods=periods_b,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=True,
+        )
+        
+        # Should have two separate subdirectories
+        subdirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+        assert len(subdirs) == 2, f"Expected 2 universe dirs, got {len(subdirs)}"
+    
+    def test_persist_disabled_no_files(self, tmp_path):
+        """With persist_to_disk=False, no files should be created."""
+        from evolution.feature_cache import FeaturePrecomputeCache
+        
+        prices = self._make_mock_prices()
+        periods = self._make_mock_periods(prices)
+        
+        cache = FeaturePrecomputeCache(
+            feature_lib=self._mock_feature_lib(),
+            prices=prices,
+            volume=None,
+            periods=periods,
+            rebalance_frequency=21,
+            cache_dir=tmp_path,
+            persist_to_disk=False,
+        )
+        
+        # No subdirectories should be created
+        assert len(list(tmp_path.iterdir())) == 0
+        assert cache.stats['disk_saves'] == 0
+        assert cache.stats['disk_loads'] == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
