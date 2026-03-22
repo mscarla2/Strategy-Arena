@@ -120,7 +120,7 @@ class GPPopulation:
         
         return GPStrategy(
             tree=tree,
-            top_pct=random.choice([10, 15, 20, 25]),
+            top_pct=random.choice([33, 50, 67, 83]),
             holding_period=random.choice([5, 10, 21, 42]),
             execution_lag=1,
             generation=0,

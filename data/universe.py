@@ -224,7 +224,6 @@ OIL_MICROCAP_STOCKS = [
     "PED",   # PEDEVCO Corp — 2018, good history
     "REI",   # Ring Energy — 2018, good history
     "PRSO",  # Peraso Inc — 2018, good history
-    "BATL",  # Battalion Oil — 2019, 24% missing (ffill applied)
 ]
 
 # Forward-test only — thesis tickers with insufficient backtest history
@@ -232,6 +231,7 @@ OIL_THESIS_TICKERS = [
     "TPET",  # Trio Petroleum — 2023, 64% missing
     "EONR",  # Eon Resources — 2022, 52% missing
     "STAK",  # Stack Energy — 2026, 87% missing
+    "BATL",  # Battalion Oil — 2019, 24% missing
 ]
 
 OIL_FUTURES_PROXIES = [

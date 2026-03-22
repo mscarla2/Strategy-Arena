@@ -118,61 +118,57 @@ class WalkForwardEvaluator:
 
         test_start_dt = pd.Timestamp(test_start)
         test_end_dt = pd.Timestamp(test_end)
-        
-        # Expanding window: use all data up to test_end
-        # Fixed window: use only data up to test_end (same behavior, but
-        # the train_start boundary is ignored — strategy sees all history)
-        if self.expanding_window:
-            # All history up to test end
-            mask = self.prices.index <= test_end_dt
-        else:
-            # Fixed window: only train_start to test_end
-            # Need train_start passed in — get from periods
-            period_idx = next(
-                (i for i, p in enumerate(self.periods) if p[2] == test_start and p[3] == test_end), 
-                None
-            )
-            if period_idx is not None:
-                train_start_dt = pd.Timestamp(self.periods[period_idx][0])
-                mask = (self.prices.index >= train_start_dt) & (self.prices.index <= test_end_dt)
-            else:
-                mask = self.prices.index <= test_end_dt
 
+        # Always use full price history up to test_end for feature computation.
+        # Features (momentum, volatility, etc.) require up to 504 days of lookback.
+        # Restricting to the training window (e.g. 6 months ≈ 126 days) causes
+        # score_stocks() to return constant 0.5 for every stock, making all
+        # strategies score identically. The GP tree is already evolved externally,
+        # so using full history here introduces no look-ahead bias.
+        mask = self.prices.index <= test_end_dt
         available_prices = self.prices.loc[mask]
-        available_volume = self.volume.loc[mask] if self.volume is not None else None  # ← add
-        
+        available_volume = self.volume.loc[mask] if self.volume is not None else None
+
         test_mask = (available_prices.index >= test_start_dt)
         test_indices = available_prices.index[test_mask]
-        
+
         if len(test_indices) < 5:
             return None
-        
+
         portfolio_returns = []
         turnovers = []
         current_positions = []
-        
+
         for i, date in enumerate(test_indices):
             rebalance_today = (i == 0 or i % self.rebalance_frequency == 0)
-            
+
             if rebalance_today:
                 date_idx = available_prices.index.get_loc(date)
                 prices_to_date = available_prices.iloc[:date_idx + 1]
-                volume_to_date = None
-                if self.volume is not None:
-                    available_volume = self.volume.loc[mask]
-                    volume_to_date = available_volume.iloc[:date_idx + 1]
-                # RC-4: Score ALL tickers (including reference panel for cross-sectional context)
-                # but only select from tradeable tickers for the portfolio
+                volume_to_date = available_volume.iloc[:date_idx + 1] if available_volume is not None else None
+
                 if self.tradeable_tickers:
-                    # Score using full universe (reference panel provides context)
                     scores = strategy.score_stocks(prices_to_date, volume=volume_to_date)
-                    # Filter to only tradeable tickers
                     tradeable_in_prices = [t for t in self.tradeable_tickers if t in scores.index]
+
                     if tradeable_in_prices:
                         tradeable_scores = scores[tradeable_in_prices]
+
+                        if tradeable_scores.nunique() <= 1:
+                            return {
+                                'period_start': test_start,
+                                'period_end': test_end,
+                                'total_return': -0.5,
+                                'sharpe_ratio': -2.0,
+                                'max_drawdown': 0.5,
+                                'turnover': 1.0,
+                                'n_days': 0,
+                            }
+
+                        tradeable_scores = tradeable_scores + np.random.uniform(0, 1e-6, len(tradeable_scores))
                         n_select = max(1, int(len(tradeable_scores) * strategy.top_pct / 100))
                         new_positions = tradeable_scores.nlargest(n_select).index.tolist()
-                        
+
                         if current_positions:
                             current_set = set(current_positions)
                             new_set = set(new_positions)
@@ -188,47 +184,44 @@ class WalkForwardEvaluator:
                     new_positions, turnover = strategy.select_stocks(
                         prices_to_date,
                         current_positions,
-                        volume=volume_to_date  # ← add this too
+                        volume=volume_to_date
                     )
-                
+
                 turnovers.append(turnover)
                 current_positions = new_positions
-            
+
             # Calculate return for this day
             if current_positions and i > 0:
-                prev_date = test_indices[i-1]
+                prev_date = test_indices[i - 1]
                 day_return = (
-                    available_prices.loc[date, current_positions] / 
+                    available_prices.loc[date, current_positions] /
                     available_prices.loc[prev_date, current_positions] - 1
                 ).mean()
-                
-                # Deduct transaction costs on rebalance
+
                 if rebalance_today and turnovers:
                     cost = turnovers[-1] * self.transaction_cost * 2
                     day_return -= cost
-                
+
                 portfolio_returns.append(day_return)
-        
+
         if not portfolio_returns:
             return None
-        
+
         returns_series = pd.Series(portfolio_returns)
         cumulative = (1 + returns_series).cumprod()
-        
         total_return = cumulative.iloc[-1] - 1
-        
+
         if returns_series.std() > 0:
             sharpe = (returns_series.mean() / returns_series.std()) * np.sqrt(252)
         else:
             sharpe = 0
-        
+
         rolling_max = cumulative.expanding().max()
         drawdown = (cumulative - rolling_max) / rolling_max
         max_dd = abs(drawdown.min())
-        
         avg_turnover = np.mean(turnovers) if turnovers else 0
-        
-        result = {
+
+        return {
             'period_start': test_start,
             'period_end': test_end,
             'total_return': total_return,
@@ -237,8 +230,6 @@ class WalkForwardEvaluator:
             'turnover': avg_turnover,
             'n_days': len(portfolio_returns),
         }
-        
-        return result
     
     def to_config(self) -> Dict[str, Any]:
         """Serialize evaluator to picklable config dict."""

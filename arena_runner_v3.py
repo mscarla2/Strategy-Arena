@@ -597,7 +597,7 @@ class GPEvolutionArena:
 
             strategy = GPStrategy(
                 tree=tree,
-                top_pct=random.choice([10, 15, 20, 25, 30]),
+                top_pct=random.choice([33, 50, 67, 83]),
                 generation=0,
                 origin="random"
             )
