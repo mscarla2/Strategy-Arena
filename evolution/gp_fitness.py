@@ -48,7 +48,7 @@ def calculate_fitness(
 ) -> FitnessResult:
     """Calculate fitness centered on benchmark-relative performance."""
     
-    if not period_results or not benchmark_results:
+    if not period_results:
         return FitnessResult(
             total=0, sharpe_component=0, return_component=0,
             stability_component=0, cost_penalty=0, avg_sharpe=0,
@@ -58,6 +58,8 @@ def calculate_fitness(
         )
     
     n = len(period_results)
+    # Pad benchmarks with zeros if fewer than period results
+    benchmark_results = list(benchmark_results) + [{}] * max(0, n - len(benchmark_results))
     
     # Extract metrics
     sharpes = [r['sharpe_ratio'] for r in period_results]
@@ -278,7 +280,7 @@ def calculate_fitness_v2(
     Returns:
         FitnessResult with fitness score and components
     """
-    if not period_results or not benchmark_results:
+    if not period_results:
         return FitnessResult(
             total=0, sharpe_component=0, return_component=0,
             stability_component=0, cost_penalty=0, avg_sharpe=0,
@@ -288,6 +290,8 @@ def calculate_fitness_v2(
         )
     
     n = len(period_results)
+    # Pad benchmarks with zeros if fewer than period results
+    benchmark_results = list(benchmark_results) + [{}] * max(0, n - len(benchmark_results))
     
     # Extract metrics
     sharpes = [r['sharpe_ratio'] for r in period_results]

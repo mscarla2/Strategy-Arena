@@ -49,6 +49,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = [
+    "e2e: end-to-end tests that run a full mini-evolution loop (slower)",
+]
 
 [tool.ruff]
 line-length = 100

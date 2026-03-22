@@ -183,8 +183,8 @@ class WalkForwardEvaluator:
                 else:
                     new_positions, turnover = strategy.select_stocks(
                         prices_to_date,
-                        current_positions,
-                        volume=volume_to_date
+                        volume=volume_to_date,
+                        current_positions=current_positions,
                     )
 
                 turnovers.append(turnover)
