@@ -25,6 +25,7 @@ class DataFetcher:
         
         # Master cache file - stores all downloaded data
         self.master_cache = self.cache_dir / "prices_master.parquet"
+        self.volume_cache = self.cache_dir / "volume_master.parquet"
     
     def _cache_path(self, start: str, end: str, tickers: List[str]) -> Path:
         """Generate cache file path."""
@@ -43,6 +44,31 @@ class DataFetcher:
                 pass
         return None
     
+    def _load_volume_cache(self) -> Optional[pd.DataFrame]:
+        if self.volume_cache.exists():
+            try:
+                df = pd.read_parquet(self.volume_cache)
+                return df if not df.empty else None
+            except Exception:
+                return None
+        return None
+
+    def _save_volume_cache(self, df: pd.DataFrame):
+        try:
+            existing = self._load_volume_cache()
+            if existing is not None:
+                all_cols = list(set(existing.columns) | set(df.columns))
+                all_dates = existing.index.union(df.index).sort_values()
+                merged = pd.DataFrame(index=all_dates, columns=all_cols)
+                for col in existing.columns:
+                    merged.loc[existing.index, col] = existing[col]
+                for col in df.columns:
+                    merged.loc[df.index, col] = df[col]
+                df = merged
+            df.to_parquet(self.volume_cache)
+        except Exception as e:
+            print(f"  Warning: Could not save volume cache: {e}")
+
     def _save_master_cache(self, df: pd.DataFrame):
         """Save or update master cache."""
         try:
@@ -73,14 +99,15 @@ class DataFetcher:
             print(f"  Warning: Could not save master cache: {e}")
     
     def _download_with_retry(self, 
-                              tickers: List[str], 
-                              start_date: str, 
-                              end_date: str,
-                              max_retries: int = 3,
-                              base_delay: float = 2.0) -> pd.DataFrame:
-        """Download with exponential backoff retry."""
+                            tickers: List[str], 
+                            start_date: str, 
+                            end_date: str,
+                            max_retries: int = 3,
+                            base_delay: float = 2.0) -> tuple:
+        """Download with exponential backoff retry. Returns (prices_df, volume_df)."""
         
-        all_data = {}
+        all_price_data = {}
+        all_volume_data = {}
         failed_tickers = []
         
         # Try bulk download first
@@ -106,28 +133,45 @@ class DataFetcher:
                 
                 # Parse the response
                 if len(tickers) == 1:
-                    if 'Close' in data.columns:
-                        all_data[tickers[0]] = data['Close']
-                    elif not data.empty:
-                        all_data[tickers[0]] = data.iloc[:, 0]
+                    if isinstance(data.columns, pd.MultiIndex):
+                        if 'Close' in data.columns.get_level_values(0):
+                            all_price_data[tickers[0]] = data['Close'].squeeze()
+                        if 'Volume' in data.columns.get_level_values(0):
+                            all_volume_data[tickers[0]] = data['Volume'].squeeze()
+                    else:
+                        if 'Close' in data.columns:
+                            all_price_data[tickers[0]] = data['Close']
+                        if 'Volume' in data.columns:
+                            all_volume_data[tickers[0]] = data['Volume']
                 
                 elif isinstance(data.columns, pd.MultiIndex):
-                    if 'Close' in data.columns.get_level_values(0):
+                    levels = data.columns.get_level_values(0)
+                    
+                    if 'Close' in levels:
                         close_data = data['Close']
+                        for col in close_data.columns:
+                            if close_data[col].notna().sum() > 0:
+                                all_price_data[col] = close_data[col]
                     else:
-                        close_data = data.iloc[:, data.columns.get_level_values(0) == data.columns.get_level_values(0)[0]]
+                        close_data = data.iloc[:, levels == levels[0]]
                         if isinstance(close_data.columns, pd.MultiIndex):
                             close_data.columns = close_data.columns.get_level_values(1)
+                        for col in close_data.columns:
+                            if close_data[col].notna().sum() > 0:
+                                all_price_data[col] = close_data[col]
                     
-                    for col in close_data.columns:
-                        if close_data[col].notna().sum() > 0:
-                            all_data[col] = close_data[col]
+                    if 'Volume' in levels:
+                        volume_data = data['Volume']
+                        for col in volume_data.columns:
+                            if volume_data[col].notna().sum() > 0:
+                                all_volume_data[col] = volume_data[col]
+                
                 else:
                     for col in data.columns:
                         if data[col].notna().sum() > 0:
-                            all_data[col] = data[col]
+                            all_price_data[col] = data[col]
                 
-                if all_data:
+                if all_price_data:
                     break
                     
             except Exception as e:
@@ -136,20 +180,22 @@ class DataFetcher:
                     failed_tickers = tickers
         
         # Fallback: individual downloads for failed tickers
-        if not all_data or len(all_data) < len(tickers) * 0.5:
-            remaining = [t for t in tickers if t not in all_data]
+        if not all_price_data or len(all_price_data) < len(tickers) * 0.5:
+            remaining = [t for t in tickers if t not in all_price_data]
             print(f"  Trying individual downloads for {len(remaining)} tickers...")
             
             for i, ticker in enumerate(remaining):
                 try:
-                    # Rate limiting with jitter
                     time.sleep(0.3 + random.uniform(0, 0.2))
                     
                     stock = yf.Ticker(ticker)
                     hist = stock.history(start=start_date, end=end_date, auto_adjust=True)
                     
-                    if not hist.empty and 'Close' in hist.columns:
-                        all_data[ticker] = hist['Close']
+                    if not hist.empty:
+                        if 'Close' in hist.columns:
+                            all_price_data[ticker] = hist['Close']
+                        if 'Volume' in hist.columns:
+                            all_volume_data[ticker] = hist['Volume']
                         
                     if (i + 1) % 10 == 0:
                         print(f"    Downloaded {i + 1}/{len(remaining)}...")
@@ -158,36 +204,30 @@ class DataFetcher:
                     failed_tickers.append(ticker)
                     continue
         
-        if not all_data:
+        if not all_price_data:
             raise ValueError("No data could be downloaded")
         
-        return pd.DataFrame(all_data)
-    
+        prices_df = pd.DataFrame(all_price_data)
+        volume_df = pd.DataFrame(all_volume_data) if all_volume_data else pd.DataFrame()
+        return prices_df, volume_df
+
     def fetch(self,
-              start_date: str,
-              end_date: str,
-              tickers: List[str] = None,
-              min_data_pct: float = 0.8,
-              use_cache: bool = True) -> pd.DataFrame:
+            start_date: str,
+            end_date: str,
+            tickers: List[str] = None,
+            min_data_pct: float = 0.8,
+            use_cache: bool = True) -> tuple:
         """
-        Fetch adjusted close prices.
-        
-        Args:
-            start_date: YYYY-MM-DD
-            end_date: YYYY-MM-DD
-            tickers: List of tickers (None = auto based on date)
-            min_data_pct: Minimum data coverage required
-            use_cache: Whether to use cached data
+        Fetch adjusted close prices and volume.
         
         Returns:
-            DataFrame: dates as index, tickers as columns
+            Tuple of (prices_df, volume_df): dates as index, tickers as columns
         """
         from data.universe import get_universe_for_period
         
         if tickers is None:
             tickers = get_universe_for_period(start_date)
         
-        # Remove known problematic tickers
         tickers = [t for t in tickers if t not in ['DOW', 'BRK.B', 'BF.B']]
         
         start_dt = pd.Timestamp(start_date)
@@ -196,25 +236,32 @@ class DataFetcher:
         # Try master cache first
         if use_cache:
             master = self._load_master_cache()
+            volume_master = self._load_volume_cache()
             if master is not None:
-                # Check if cache covers our date range
                 cache_start = master.index.min()
                 cache_end = master.index.max()
-                
-                # Find tickers available in cache
                 available = [t for t in tickers if t in master.columns]
                 
                 if (len(available) >= MIN_TICKERS_REQUIRED and
                     cache_start <= start_dt and
-                    cache_end >= end_dt - pd.Timedelta(days=7)):  # Allow 7 day buffer for weekends
+                    cache_end >= end_dt - pd.Timedelta(days=7)):
                     
-                    # Use cached data
                     df = master.loc[start_dt:end_dt, available].copy()
                     df = df.ffill(limit=5).dropna(how='all')
                     
                     if len(df) > 100 and len(df.columns) >= MIN_TICKERS_REQUIRED:
                         print(f"  Loaded from cache: {len(df)} days, {len(df.columns)} tickers")
-                        return df
+                        
+                        # Load matching volume
+                        volume_df = pd.DataFrame()
+                        if volume_master is not None:
+                            vol_available = [t for t in df.columns if t in volume_master.columns]
+                            if vol_available:
+                                volume_df = volume_master.loc[start_dt:end_dt, vol_available].copy()
+                                volume_df = volume_df.ffill(limit=5).fillna(0)
+                                print(f"  Loaded volume from cache: {len(volume_df.columns)} tickers")
+                        
+                        return df, volume_df
                     else:
                         print(f"  Cache insufficient, downloading fresh data...")
                 else:
@@ -224,15 +271,15 @@ class DataFetcher:
         # Download fresh data
         print(f"  Downloading {len(tickers)} tickers: {start_date} to {end_date}...")
         
-        df = self._download_with_retry(tickers, start_date, end_date)
+        prices_df, volume_df = self._download_with_retry(tickers, start_date, end_date)
         
-        # Filter by data coverage
-        min_rows = len(df) * min_data_pct
-        valid_cols = [c for c in df.columns if df[c].notna().sum() >= min_rows]
+        # Filter prices by data coverage
+        min_rows = len(prices_df) * min_data_pct
+        valid_cols = [c for c in prices_df.columns if prices_df[c].notna().sum() >= min_rows]
         
         if len(valid_cols) < MIN_TICKERS_REQUIRED:
-            min_rows = len(df) * 0.5
-            valid_cols = [c for c in df.columns if df[c].notna().sum() >= min_rows]
+            min_rows = len(prices_df) * 0.5
+            valid_cols = [c for c in prices_df.columns if prices_df[c].notna().sum() >= min_rows]
         
         if len(valid_cols) < MIN_TICKERS_REQUIRED:
             raise ValueError(
@@ -240,21 +287,28 @@ class DataFetcher:
                 f"(need {MIN_TICKERS_REQUIRED})"
             )
         
-        df = df[valid_cols]
-        df = df.ffill(limit=5)
-        df = df.dropna(how='all')
+        prices_df = prices_df[valid_cols].ffill(limit=5).dropna(how='all')
         
-        # Save to master cache
-        self._save_master_cache(df)
+        # Align volume to valid price tickers
+        if not volume_df.empty:
+            vol_cols = [c for c in valid_cols if c in volume_df.columns]
+            volume_df = volume_df[vol_cols].ffill(limit=5).fillna(0)
         
-        print(f"  Loaded {len(df)} days, {len(df.columns)} tickers")
-        return df
-    
+        # Save caches
+        self._save_master_cache(prices_df)
+        if not volume_df.empty:
+            self._save_volume_cache(volume_df)
+        
+        print(f"  Loaded {len(prices_df)} days, {len(prices_df.columns)} tickers")
+        if not volume_df.empty:
+            print(f"  Volume data: {len(volume_df.columns)} tickers")
+        
+        return prices_df, volume_df    
     def clear_cache(self):
         """Clear cached data."""
         for f in self.cache_dir.glob("*.parquet"):
             f.unlink()
-        print("Cache cleared")
+        print("Caches cleared")
 
 
 # Convenience function

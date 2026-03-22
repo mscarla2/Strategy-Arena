@@ -147,6 +147,38 @@ def show_database_stats(db_path: str = "data/gp_strategies.db"):
             print(f"   {formula}")
             print()
 
+def wipe_database(db_path: str = "data/gp_strategies.db", dry_run: bool = True):
+    """Nuclear option — wipe all strategies and runs for a clean start."""
+    
+    db_path = Path(db_path)
+    if not db_path.exists():
+        print(f"❌ Database not found: {db_path}")
+        return
+    
+    with sqlite3.connect(db_path) as conn:
+        counts = {
+            'strategies': conn.execute("SELECT COUNT(*) FROM gp_strategies").fetchone()[0],
+            'runs': conn.execute("SELECT COUNT(*) FROM evolution_runs").fetchone()[0],
+            'period_results': conn.execute("SELECT COUNT(*) FROM gp_period_results").fetchone()[0],
+            'generation_stats': conn.execute("SELECT COUNT(*) FROM generation_stats").fetchone()[0],
+            'benchmarks': conn.execute("SELECT COUNT(*) FROM benchmarks").fetchone()[0],
+        }
+        
+        print(f"\n{'='*80}")
+        print(f"FULL WIPE — Records to delete:")
+        for table, count in counts.items():
+            print(f"  {table}: {count}")
+        print(f"{'='*80}\n")
+        
+        if dry_run:
+            print("🔍 DRY RUN — Run with --wipe --execute to actually delete")
+        else:
+            for table in ['gp_period_results', 'generation_stats', 'benchmarks', 
+                         'gp_strategies', 'evolution_runs']:
+                conn.execute(f"DELETE FROM {table}")
+            conn.execute("DELETE FROM sqlite_sequence")
+            conn.commit()
+            print("✅ Database wiped clean")
 
 if __name__ == "__main__":
     import argparse
@@ -158,8 +190,13 @@ if __name__ == "__main__":
                        help='Show database statistics')
     parser.add_argument('--db', type=str, default='data/gp_strategies.db',
                        help='Path to database (default: data/gp_strategies.db)')
-    
+    parser.add_argument('--wipe', action='store_true',
+                   help='Wipe entire database (use with --execute)')
     args = parser.parse_args()
+    if args.wipe:
+        wipe_database(args.db, dry_run=not args.execute)
+    else:
+        cleanup_database(args.db, dry_run=not args.execute)
     
     if args.stats:
         show_database_stats(args.db)

@@ -1368,6 +1368,259 @@ class AlphaGeneCharts:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# DASHBOARD CHART FUNCTIONS (Phase 3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def create_oil_overlay_chart(
+    strategy_returns: pd.Series,
+    oil_prices: pd.Series,
+    strategy_name: str = "Strategy",
+    oil_name: str = "USO (WTI Proxy)",
+) -> go.Figure:
+    """Dual-axis Plotly chart: strategy cumulative returns + oil price overlay.
+
+    Args:
+        strategy_returns: Series of period returns (not cumulative).
+        oil_prices: Series of oil ETF prices (e.g. USO).
+        strategy_name: Legend label for the strategy line.
+        oil_name: Legend label for the oil line.
+
+    Returns:
+        Plotly Figure with two y-axes.
+    """
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Strategy cumulative returns
+    if strategy_returns is not None and len(strategy_returns) > 0:
+        cum = (1 + strategy_returns).cumprod()
+        cum_pct = (cum - 1) * 100
+        fig.add_trace(
+            go.Scatter(
+                x=cum_pct.index,
+                y=cum_pct.values,
+                name=strategy_name,
+                line=dict(color=ChartTheme.PRIMARY, width=3),
+                hovertemplate="%{x}<br>Return: %{y:.1f}%<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+
+    # Oil price
+    if oil_prices is not None and len(oil_prices) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=oil_prices.index,
+                y=oil_prices.values,
+                name=oil_name,
+                line=dict(color=ChartTheme.WARNING, width=2, dash="dot"),
+                hovertemplate="%{x}<br>Price: $%{y:.2f}<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_layout(
+        title="🛢️ Strategy vs Oil Price",
+        template="plotly_dark",
+        paper_bgcolor=ChartTheme.PAPER,
+        plot_bgcolor=ChartTheme.BACKGROUND,
+        font=dict(color=ChartTheme.TEXT),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig.update_yaxes(title_text="Cumulative Return (%)", secondary_y=False, gridcolor=ChartTheme.GRID)
+    fig.update_yaxes(title_text="Oil Price ($)", secondary_y=True, gridcolor=ChartTheme.GRID)
+
+    return fig
+
+
+def create_alpha_heatmap(
+    period_results: list,
+    benchmark_results: list,
+) -> go.Figure:
+    """Quarterly alpha heatmap — green for positive alpha, red for negative.
+
+    Args:
+        period_results: List of dicts with 'period_start' and 'total_return'.
+        benchmark_results: List of dicts with 'period_start' and 'total_return'.
+
+    Returns:
+        Plotly Figure (annotated heatmap).
+    """
+    if not period_results or not benchmark_results:
+        fig = go.Figure()
+        fig.update_layout(title="Alpha Heatmap — No Data", template="plotly_dark",
+                          paper_bgcolor=ChartTheme.PAPER, plot_bgcolor=ChartTheme.BACKGROUND)
+        return fig
+
+    # Build lookup for benchmark returns keyed by period_start
+    bench_map = {b["period_start"]: b["total_return"] for b in benchmark_results}
+
+    # Compute alpha per period and bucket into year / quarter
+    rows: Dict[str, Dict[str, float]] = {}  # year -> {quarter_label: alpha}
+    for p in sorted(period_results, key=lambda x: x["period_start"]):
+        ps = p["period_start"]
+        ts = pd.Timestamp(ps)
+        year = str(ts.year)
+        quarter = f"Q{(ts.month - 1) // 3 + 1}"
+        alpha = p["total_return"] - bench_map.get(ps, 0)
+        rows.setdefault(year, {})[quarter] = alpha * 100  # percent
+
+    years = sorted(rows.keys())
+    quarters = ["Q1", "Q2", "Q3", "Q4"]
+
+    z = []
+    text = []
+    for y in years:
+        row_vals = []
+        row_text = []
+        for q in quarters:
+            val = rows.get(y, {}).get(q, None)
+            row_vals.append(val if val is not None else 0)
+            row_text.append(f"{val:+.1f}%" if val is not None else "—")
+        z.append(row_vals)
+        text.append(row_text)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=quarters,
+            y=years,
+            text=text,
+            texttemplate="%{text}",
+            colorscale=[[0, ChartTheme.ERROR], [0.5, ChartTheme.GRID], [1, ChartTheme.SUCCESS]],
+            zmid=0,
+            hovertemplate="Year %{y} %{x}<br>Alpha: %{text}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="📅 Quarterly Alpha vs Benchmark",
+        template="plotly_dark",
+        paper_bgcolor=ChartTheme.PAPER,
+        plot_bgcolor=ChartTheme.BACKGROUND,
+        font=dict(color=ChartTheme.TEXT),
+        xaxis_title="Quarter",
+        yaxis_title="Year",
+        yaxis=dict(autorange="reversed"),
+    )
+    return fig
+
+
+def create_feature_importance_bar(features_df: pd.DataFrame) -> go.Figure:
+    """Horizontal bar chart of top features by weighted score.
+
+    Args:
+        features_df: DataFrame with columns 'feature' and 'weighted_score'.
+
+    Returns:
+        Plotly Figure.
+    """
+    if features_df is None or features_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Feature Importance — No Data", template="plotly_dark",
+                          paper_bgcolor=ChartTheme.PAPER, plot_bgcolor=ChartTheme.BACKGROUND)
+        return fig
+
+    df = features_df.head(20).sort_values("weighted_score", ascending=True)
+
+    fig = go.Figure(
+        go.Bar(
+            x=df["weighted_score"],
+            y=df["feature"],
+            orientation="h",
+            marker_color=ChartTheme.PRIMARY,
+            hovertemplate="<b>%{y}</b><br>Score: %{x:.3f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="🏆 Top 20 Features by Weighted Score",
+        xaxis_title="Weighted Score (usage × avg fitness)",
+        yaxis_title="Feature",
+        template="plotly_dark",
+        paper_bgcolor=ChartTheme.PAPER,
+        plot_bgcolor=ChartTheme.BACKGROUND,
+        font=dict(color=ChartTheme.TEXT),
+        height=max(400, len(df) * 28),
+        margin=dict(l=200),
+    )
+    return fig
+
+
+def create_feature_category_pie(categories_df: pd.DataFrame) -> go.Figure:
+    """Pie chart of feature usage by category.
+
+    Args:
+        categories_df: DataFrame with columns 'category' and 'count'.
+
+    Returns:
+        Plotly Figure.
+    """
+    if categories_df is None or categories_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Feature Categories — No Data", template="plotly_dark",
+                          paper_bgcolor=ChartTheme.PAPER, plot_bgcolor=ChartTheme.BACKGROUND)
+        return fig
+
+    fig = go.Figure(
+        go.Pie(
+            labels=categories_df["category"],
+            values=categories_df["count"],
+            hole=0.4,
+            marker=dict(colors=ChartTheme.STRATEGY_COLORS[: len(categories_df)]),
+            textinfo="label+percent",
+            hovertemplate="<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="📊 Feature Category Breakdown",
+        template="plotly_dark",
+        paper_bgcolor=ChartTheme.PAPER,
+        plot_bgcolor=ChartTheme.BACKGROUND,
+        font=dict(color=ChartTheme.TEXT),
+    )
+    return fig
+
+
+def create_fitness_evolution_chart(generation_stats: list) -> go.Figure:
+    """Line chart showing best / avg / min fitness across generations.
+
+    Args:
+        generation_stats: List of dicts with keys 'generation',
+            'max_fitness', 'avg_fitness', 'min_fitness'.
+
+    Returns:
+        Plotly Figure.
+    """
+    if not generation_stats:
+        fig = go.Figure()
+        fig.update_layout(title="Fitness Evolution — No Data", template="plotly_dark",
+                          paper_bgcolor=ChartTheme.PAPER, plot_bgcolor=ChartTheme.BACKGROUND)
+        return fig
+
+    gens = [s.get("generation", i) for i, s in enumerate(generation_stats)]
+    best = [s.get("max_fitness", s.get("best_fitness", 0)) for s in generation_stats]
+    avg = [s.get("avg_fitness", 0) for s in generation_stats]
+    worst = [s.get("min_fitness", 0) for s in generation_stats]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=gens, y=best, name="Best", line=dict(color=ChartTheme.SUCCESS, width=3)))
+    fig.add_trace(go.Scatter(x=gens, y=avg, name="Average", line=dict(color=ChartTheme.PRIMARY, width=2)))
+    fig.add_trace(go.Scatter(x=gens, y=worst, name="Worst", line=dict(color=ChartTheme.ERROR, width=1, dash="dot")))
+
+    fig.update_layout(
+        title="🧬 Fitness Evolution",
+        xaxis_title="Generation",
+        yaxis_title="Fitness",
+        template="plotly_dark",
+        paper_bgcolor=ChartTheme.PAPER,
+        plot_bgcolor=ChartTheme.BACKGROUND,
+        font=dict(color=ChartTheme.TEXT),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # CONVENIENCE FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 

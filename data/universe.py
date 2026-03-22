@@ -217,17 +217,21 @@ def get_sector_tickers(sector: str) -> List[str]:
     return sectors.get(sector.lower(), [])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# OIL-FOCUSED UNIVERSE (2025+)
-# ═══════════════════════════════════════════════════════════════════════════════
-
 OIL_MICROCAP_STOCKS = [
-    "EONR",  # Eon Resources Inc
-    "TPET",  # Trio Petroleum Corp
-    "USEG",  # U.S. Energy Corp
-    "STAK",  # Stack Energy Corp
-    "PRSO",  # Peraso Inc
-    "BATL",  # Battalion Oil Corporation
+    "USEG",  # U.S. Energy Corp — 2018, good history
+    "MXC",   # Mexco Energy — 2018, good history
+    "BRN",   # Barnwell Industries — 2018, good history
+    "PED",   # PEDEVCO Corp — 2018, good history
+    "REI",   # Ring Energy — 2018, good history
+    "PRSO",  # Peraso Inc — 2018, good history
+    "BATL",  # Battalion Oil — 2019, 24% missing (ffill applied)
+]
+
+# Forward-test only — thesis tickers with insufficient backtest history
+OIL_THESIS_TICKERS = [
+    "TPET",  # Trio Petroleum — 2023, 64% missing
+    "EONR",  # Eon Resources — 2022, 52% missing
+    "STAK",  # Stack Energy — 2026, 87% missing
 ]
 
 OIL_FUTURES_PROXIES = [
@@ -235,7 +239,7 @@ OIL_FUTURES_PROXIES = [
     "BNO",   # United States Brent Oil Fund (ETF proxy for Brent)
 ]
 
-# Combined oil-focused universe (legacy — 8 tickers)
+# Combined oil-focused universe (legacy — kept for backward compatibility)
 OIL_FOCUSED_UNIVERSE = OIL_MICROCAP_STOCKS + OIL_FUTURES_PROXIES
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -264,11 +268,10 @@ OIL_BENCHMARKS = [
     "XOP",   # SPDR S&P Oil & Gas Exploration & Production ETF
 ]
 
-# Tradeable universe: microcap stocks that the GP can actually hold
+# Tradeable universe: microcap stocks the GP can actually hold
 OIL_TRADEABLE_UNIVERSE = OIL_MICROCAP_STOCKS
 
 # Full universe for data download: tradeable + reference panel + benchmarks
-# Reference panel provides cross-sectional context but is NOT traded
 OIL_FULL_DOWNLOAD_UNIVERSE = list(set(
     OIL_TRADEABLE_UNIVERSE + OIL_REFERENCE_PANEL + OIL_BENCHMARKS
 ))
@@ -277,11 +280,11 @@ OIL_FULL_DOWNLOAD_UNIVERSE = list(set(
 def get_oil_universe(expanded: bool = True) -> List[str]:
     """
     Get oil-focused universe for volatile oil market analysis.
-    
+
     Args:
         expanded: If True, return full download universe (tradeable + reference + benchmarks).
-                  If False, return legacy 8-ticker universe for backward compatibility.
-    
+                  If False, return legacy focused universe for backward compatibility.
+
     Returns:
         List of oil tickers
     """
@@ -295,6 +298,15 @@ def get_oil_tradeable_tickers() -> List[str]:
     return OIL_TRADEABLE_UNIVERSE
 
 
+def get_oil_thesis_tickers() -> List[str]:
+    """
+    Get forward-test only thesis tickers (TPET, EONR, STAK).
+    These have insufficient history for backtesting but are the primary
+    conviction tickers for forward deployment.
+    """
+    return OIL_THESIS_TICKERS
+
+
 def get_oil_reference_panel() -> List[str]:
     """Get reference panel tickers for cross-sectional feature computation."""
     return OIL_REFERENCE_PANEL
@@ -303,8 +315,6 @@ def get_oil_reference_panel() -> List[str]:
 def get_oil_benchmarks() -> List[str]:
     """Get oil benchmark tickers."""
     return OIL_BENCHMARKS
-
-
 # Quick stats
 if __name__ == "__main__":
     print(f"S&P 500 tickers: {len(SP500_FULL)}")

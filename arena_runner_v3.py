@@ -52,6 +52,7 @@ from evolution.gp import (
 )
 
 from evolution.gp_storage import GPDatabase
+from evolution.progress import EvolutionProgressReporter
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -295,6 +296,7 @@ class GPEvolutionArena:
         recency_half_life: int = None,  # Uses config default if None
         use_fitness_v2: bool = False,
         use_feature_cache: bool = True,
+        expanding_window: bool = False,
     ):
         self.start_date = start_date
         self.end_date = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -329,6 +331,7 @@ class GPEvolutionArena:
         self.recency_half_life = recency_half_life or RECENCY_HALF_LIFE
         self.use_fitness_v2 = use_fitness_v2
         self.use_feature_cache = use_feature_cache
+        self.expanding_window = expanding_window
         
         # Performance optimization
         # If parallel_workers is 0, use sequential (1 worker)
@@ -404,12 +407,16 @@ class GPEvolutionArena:
 
         self.generation_history: List[Dict] = []
         self.prices: Optional[pd.DataFrame] = None
+        self.volume: Optional[pd.DataFrame] = None
         self.periods: List[Tuple[str, str, str, str]] = []
         self.benchmark_results: List[Dict] = []
         self.oil_benchmark_results: List[Dict] = []  # USO/BNO benchmarks
         
         # Feature cache for performance
         self.feature_cache: Optional[Dict[str, pd.DataFrame]] = None
+        
+        # Progress reporter for dashboard IPC
+        self.progress_reporter = EvolutionProgressReporter()
     
     def _init_priority_components(self):
         """Initialize Priority 1 & 2 components."""
@@ -663,6 +670,10 @@ class GPEvolutionArena:
             use_fitness_v2=self.use_fitness_v2,
             # RC-4: Oil reference panel — restrict portfolio to tradeable tickers
             tradeable_tickers=self.tradeable_tickers,
+            # Expanding window
+            expanding_window=self.expanding_window,
+            # Volume
+            volume = self.volume,
         )
         
         results = {}
@@ -783,7 +794,7 @@ class GPEvolutionArena:
                 child = self.operators.mutate(parent)
             else:
                 # When diversity is low, prefer creating new random strategies
-                if diversity_ratio < 0.4:  # Increased threshold
+                if diversity_ratio < 0.6:  # Increased threshold
                     depth = random.randint(2, self.max_depth)
                     tree = self.generator.random_tree(max_depth=depth, method="grow")
                     child = GPStrategy(
@@ -913,6 +924,13 @@ class GPEvolutionArena:
         }
 
         self.generation_history.append(stats)
+
+        # Report progress to dashboard via file-based IPC
+        self.progress_reporter.report_generation({
+            **stats,
+            'total_generations': getattr(self, '_n_generations', 30),
+        })
+
         return stats
 
     def should_early_stop(self) -> bool:
@@ -973,6 +991,8 @@ class GPEvolutionArena:
         step_months: int = 3,
     ) -> List[Dict]:
         """Run the full GP evolution."""
+        self._n_generations = n_generations
+        self.progress_reporter.clear()  # Clean slate for new run
         print_banner()
 
         print_section("CONFIGURATION", "⚙️")
@@ -998,14 +1018,22 @@ class GPEvolutionArena:
             data_start = first_test_start - pd.Timedelta(days=int(self.WARMUP_DAYS * 1.5))
             data_start_str = data_start.strftime("%Y-%m-%d")
 
-            self.prices = self.data_fetcher.fetch(
+            self.prices, self.volume = self.data_fetcher.fetch(
                 start_date=data_start_str,
                 end_date=self.end_date,
                 tickers=self.tickers
             )
 
             self.prices = self.prices.dropna(axis=1, how='all').ffill().bfill()
-            print_status(f"Loaded {len(self.prices)} days, {len(self.prices.columns)} tickers", "success")
+            
+            # Align volume to match cleaned prices
+            if self.volume is not None and not self.volume.empty:
+                vol_cols = [c for c in self.prices.columns if c in self.volume.columns]
+                self.volume = self.volume[vol_cols].reindex(self.prices.index).ffill().bfill().fillna(0)
+                print_status(f"Loaded {len(self.prices)} days, {len(self.prices.columns)} tickers (volume: {len(self.volume.columns)} tickers)", "success")
+            else:
+                self.volume = None
+                print_status(f"Loaded {len(self.prices)} days, {len(self.prices.columns)} tickers (no volume data)", "success")
 
         except Exception as e:
             print_status(f"Error loading data: {e}", "error")
@@ -1040,6 +1068,14 @@ class GPEvolutionArena:
         elapsed = datetime.now() - start_time
         self._save_to_database()
         self._print_final_report(elapsed)
+
+        # Report completion to dashboard
+        self.progress_reporter.report_complete({
+            'generation': self.generation,
+            'total_generations': n_generations,
+            'best_fitness': self.best_fitness,
+            'avg_fitness': np.mean([h['avg_fitness'] for h in self.generation_history]) if self.generation_history else 0,
+        })
 
         return self.generation_history
 
@@ -1157,6 +1193,8 @@ def main():
                        help='Recency weighting half-life in periods (default: 4 = 1 year with quarterly steps)')
     parser.add_argument('--no-feature-cache', action='store_true',
                    help='Disable feature pre-computation cache (on-demand mode)')
+    parser.add_argument('--expanding-window', action='store_true',
+                       help='Use expanding training window (all history up to test_start) instead of fixed window')
 
     args = parser.parse_args()
     
@@ -1213,7 +1251,8 @@ def main():
         universe_type=args.universe_type,
         recency_half_life=args.recency_half_life,
         use_fitness_v2=args.use_fitness_v2,
-        use_feature_cache=not args.no_feature_cache
+        use_feature_cache=not args.no_feature_cache,
+        expanding_window=args.expanding_window,
     )
 
     arena.run(

@@ -77,6 +77,7 @@ echo ""
 
 python3 arena_runner_v3.py \
     --universe oil \
+    --universe-type oil_microcap \
     --start 2018-01-01 \
     --population 100 \
     --generations 30 \
