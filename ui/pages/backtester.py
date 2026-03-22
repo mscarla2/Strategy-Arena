@@ -99,7 +99,7 @@ def render():
     st.divider()
 
     # ── Run button ─────────────────────────────────────────────────────────
-    if st.button("🚀 Launch Evolution", type="primary", use_container_width=True):
+    if st.button("🚀 Launch Evolution", type="primary", width='stretch'):
         cmd = [sys.executable, RUNNER_SCRIPT]
 
         # Universe            
@@ -210,7 +210,7 @@ def render():
     # Fitness evolution chart
     if history:
         fig = create_fitness_evolution_chart(history)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Auto-refresh while running
     if status == "running":

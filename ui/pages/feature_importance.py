@@ -253,7 +253,7 @@ def render():
 
     # ── Top 20 features bar chart ──────────────────────────────────────────
     fig_bar = create_feature_importance_bar(features_df)
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar,width='stretch')
 
     # ── Category breakdown pie chart ───────────────────────────────────────
     features_df["category"] = features_df["feature"].apply(_categorize_feature)
@@ -268,17 +268,17 @@ def render():
     col_pie, col_table = st.columns([1, 1])
     with col_pie:
         fig_pie = create_feature_category_pie(cat_df)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie,width='stretch')
     with col_table:
         st.subheader("Category Summary")
-        st.dataframe(cat_df, use_container_width=True, hide_index=True)
+        st.dataframe(cat_df,width='stretch', hide_index=True)
 
     # ── Feature usage by fitness tier ──────────────────────────────────────
     st.subheader("Feature Usage by Fitness Tier")
     tier_df = _load_feature_by_tier(min_fitness=min_fitness)
     if not tier_df.empty:
         fig_tier = _build_tier_chart(tier_df)
-        st.plotly_chart(fig_tier, use_container_width=True)
+        st.plotly_chart(fig_tier,width='stretch')
     else:
         st.info("Not enough data for tier analysis.")
 
@@ -286,4 +286,4 @@ def render():
     with st.expander("📋 Raw Feature Data"):
         display_df = features_df[["feature", "usage_count", "usage_pct", "avg_fitness", "max_fitness", "weighted_score"]].copy()
         display_df.columns = ["Feature", "Usage", "Usage %", "Avg Fitness", "Max Fitness", "Weighted Score"]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df,width='stretch', hide_index=True)

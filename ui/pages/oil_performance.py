@@ -262,7 +262,7 @@ def render():
 
     # ── Cumulative returns chart ───────────────────────────────────────────
     fig_cum = _build_cumulative_chart(period_results, benchmark_results, "Strategy")
-    st.plotly_chart(fig_cum, use_container_width=True)
+    st.plotly_chart(fig_cum,width='stretch')
 
     # ── Oil price overlay ──────────────────────────────────────────────────
     # Build strategy returns series for overlay
@@ -281,7 +281,7 @@ def render():
             index=pd.to_datetime([b["period_start"] for b in uso_sorted]),
         )
         fig_overlay = create_oil_overlay_chart(strat_returns, uso_prices)
-        st.plotly_chart(fig_overlay, use_container_width=True)
+        st.plotly_chart(fig_overlay,width='stretch')
 
     # ── Alpha heatmap ──────────────────────────────────────────────────────
     # Use XLE benchmark for alpha calculation
@@ -293,13 +293,13 @@ def render():
 
     if xle_bench:
         fig_heat = create_alpha_heatmap(period_results, xle_bench)
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat,width='stretch')
 
     # ── Period details table ───────────────────────────────────────────────
     st.subheader("📋 Period Details")
     df_table = _build_period_table(period_results, benchmark_results)
     if not df_table.empty:
-        st.dataframe(df_table, use_container_width=True, hide_index=True)
+        st.dataframe(df_table,width='stretch', hide_index=True)
 
     # ── Generation stats (if available) ────────────────────────────────────
     strategy_info = next((s for s in strategies if s["strategy_id"] == strategy_id), None)
@@ -308,4 +308,4 @@ def render():
         if gen_stats:
             st.subheader("🧬 Evolution Progress")
             fig_evo = create_fitness_evolution_chart(gen_stats)
-            st.plotly_chart(fig_evo, use_container_width=True)
+            st.plotly_chart(fig_evo,width='stretch')
