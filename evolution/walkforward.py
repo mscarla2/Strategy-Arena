@@ -42,6 +42,10 @@ class WalkForwardEvaluator:
         # Expanding window option
         expanding_window: bool = False,
         volume: Optional[pd.DataFrame] = None,
+        # Portfolio-level trailing stop: exit all positions when portfolio
+        # drawdown from running high-water mark exceeds this fraction.
+        # None or 0.0 = disabled.
+        portfolio_stop_pct: Optional[float] = None,
     ):
         self.prices = prices
         self.periods = periods
@@ -67,8 +71,8 @@ class WalkForwardEvaluator:
         # Expanding window: when True, training data grows over time
         # (all history up to test_start instead of fixed train window)
         self.expanding_window = expanding_window
-        
         self.volume = volume
+        self.portfolio_stop_pct = portfolio_stop_pct if portfolio_stop_pct and portfolio_stop_pct > 0 else None
     
     def evaluate_strategy(self, strategy) -> FitnessResult:
         """Evaluate strategy across all periods."""
@@ -138,6 +142,9 @@ class WalkForwardEvaluator:
         portfolio_returns = []
         turnovers = []
         current_positions = []
+        portfolio_high_water = 1.0  # track running max for stop
+        portfolio_value = 1.0       # normalised portfolio value
+        in_stop_out = False         # True = stopped out, sitting in cash
 
         for i, date in enumerate(test_indices):
             rebalance_today = (i == 0 or i % self.rebalance_frequency == 0)
@@ -191,18 +198,41 @@ class WalkForwardEvaluator:
                 current_positions = new_positions
 
             # Calculate return for this day
-            if current_positions and i > 0:
+            if i > 0:
                 prev_date = test_indices[i - 1]
-                day_return = (
-                    available_prices.loc[date, current_positions] /
-                    available_prices.loc[prev_date, current_positions] - 1
-                ).mean()
 
-                if rebalance_today and turnovers:
-                    cost = turnovers[-1] * self.transaction_cost * 2
-                    day_return -= cost
+                if current_positions and not in_stop_out:
+                    day_return = (
+                        available_prices.loc[date, current_positions] /
+                        available_prices.loc[prev_date, current_positions] - 1
+                    ).mean()
+
+                    if rebalance_today and turnovers:
+                        cost = turnovers[-1] * self.transaction_cost * 2
+                        day_return -= cost
+                else:
+                    # Cash: zero return
+                    day_return = 0.0
 
                 portfolio_returns.append(day_return)
+
+                # Update portfolio value and check stop
+                portfolio_value *= (1 + day_return)
+                if portfolio_value > portfolio_high_water:
+                    portfolio_high_water = portfolio_value
+                    if in_stop_out:
+                        # Recovered to new high: re-enter on next rebalance day
+                        in_stop_out = False
+
+                if (
+                    self.portfolio_stop_pct is not None
+                    and not in_stop_out
+                    and portfolio_high_water > 0
+                    and (portfolio_high_water - portfolio_value) / portfolio_high_water >= self.portfolio_stop_pct
+                ):
+                    # Stop triggered: move to cash
+                    in_stop_out = True
+                    current_positions = []
 
         if not portfolio_returns:
             return None
@@ -252,6 +282,7 @@ class WalkForwardEvaluator:
             # Expanding window
             'expanding_window': self.expanding_window,
             'volume': self.volume,
+            'portfolio_stop_pct': self.portfolio_stop_pct,
         }
     
     @classmethod

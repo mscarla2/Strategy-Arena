@@ -3,9 +3,10 @@
 ALPHAGENE Strategy Dashboard — Multi-Page Streamlit App
 
 Navigation hub that routes to specialised pages:
-  • Oil Performance
-  • Backtester Controls
-  • Feature Importance
+  - Oil Performance
+  - Formula Lab
+  - Backtester Controls
+  - Feature Importance
 """
 
 import sys
@@ -29,47 +30,31 @@ st.set_page_config(
 # SIDEBAR NAVIGATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-st.sidebar.image(
-    "https://img.icons8.com/color/96/dna-helix.png",
-    width=64,
-)
 st.sidebar.title("ALPHAGENE")
-st.sidebar.caption("Genetic Programming Arena v3.0")
 
-page = st.sidebar.selectbox(
+NAV_OIL = "Oil Performance"
+NAV_LAB = "Formula Lab"
+NAV_BACKTEST = "Backtester"
+NAV_FEATURES = "Feature Importance"
+
+page = st.sidebar.radio(
     "Navigation",
-    [
-        "🛢️ Oil Performance",
-        "🧪 Backtester",
-        "📊 Feature Importance",
-    ],
+    [NAV_OIL, NAV_LAB, NAV_BACKTEST, NAV_FEATURES],
 )
-
-st.sidebar.divider()
-st.sidebar.caption("Phase 3 — Dashboard & Management UI")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE ROUTING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if page == "🛢️ Oil Performance":
+if page == NAV_OIL:
     from ui.pages.oil_performance import render
     render()
-elif page == "🧪 Backtester":
+elif page == NAV_LAB:
+    from ui.pages.formula_lab import render
+    render()
+elif page == NAV_BACKTEST:
     from ui.pages.backtester import render
     render()
-elif page == "📊 Feature Importance":
+elif page == NAV_FEATURES:
     from ui.pages.feature_importance import render
     render()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FOOTER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-st.sidebar.divider()
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    st.sidebar.caption("🧬 AlphaGene v3.0")
-with col2:
-    st.sidebar.caption("✅ Production Ready")

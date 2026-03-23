@@ -18,7 +18,7 @@ from evolution.nodes import Node
 # GP STRATEGY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@dataclass 
+@dataclass
 class GPStrategy:
     """GP Strategy with expression tree."""
     
@@ -32,10 +32,12 @@ class GPStrategy:
     strategy_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     fitness: float = 0.0
     period_metrics: Optional[List[Dict]] = field(default=None, repr=False)
+    # Feature library configuration
+    enable_oil: bool = False
     
     def __post_init__(self):
         from evolution.features import FeatureLibrary
-        self.feature_lib = FeatureLibrary()
+        self.feature_lib = FeatureLibrary(enable_oil=self.enable_oil)
         self._last_positions: Optional[List[str]] = None
         self._position_ages: Dict[str, int] = {}
 
