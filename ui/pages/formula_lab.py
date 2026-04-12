@@ -690,7 +690,7 @@ def render():
         with k1:
             st.metric("Fitness", f"{result['fitness']:+.3f}")
         with k2:
-            st.metric("Cumul. Return", f"{cum_return:+.1%}")
+            st.metric("Cumul. Return", f"{cum_return * 100:+.1f}%")
         with k3:
             alpha_str = f"{alpha_vs_bench:+.1%}" if alpha_vs_bench is not None else "N/A"
             st.metric(f"Alpha vs {bench_ticker}", alpha_str)

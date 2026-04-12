@@ -1,0 +1,1386 @@
+════════════════════════════════════════════════════════════════════════
+
+  TPET & EONR — MASTER ANALYSIS SUITE
+
+  Run date: 2026-04-01 14:35
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+Downloading data…
+
+  TPET: 742 days  (2023-04-18 → 2026-04-01)
+
+  EONR: 1000 days  (2022-04-06 → 2026-04-01)
+
+  USO: 1065 days  (2022-01-03 → 2026-04-01)
+
+  CL=F: 1067 days  (2022-01-03 → 2026-04-01)
+
+  XOP: 1065 days  (2022-01-03 → 2026-04-01)
+
+  XLE: 1065 days  (2022-01-03 → 2026-04-01)
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §1  INTRADAY MICROSTRUCTURE — March vs Rest of Year
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  TPET — March vs Rest of Year
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Metric                             March       Other        Diff     Ratio
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Intraday range (%)               +17.002     +11.560      +5.442      1.47x  ◄
+
+  Drop from open (%)                +9.038      +5.889      +3.150      1.53x  ◄
+
+  Rise from open (%)                +7.963      +5.671      +2.292      1.40x  ◄
+
+  Open→Close (%)                    -1.713      -0.898      -0.814      1.91x  ◄
+
+  Overnight return (%)              +2.122      +1.195      +0.928      1.78x  ◄
+
+  Volume ratio (vs 20d)             +1.287      +1.158      +0.128      1.11x
+
+  Gap from prev close (%)           +4.560      +0.968      +3.591      4.71x  ◄
+
+
+
+  TPET — March by Week
+
+    Week     N   AvgRet%   TotalRet%   WinRate   VolRatio
+
+  Week 1    15   +19.761      +359.3%     53.3%       3.33
+
+  Week 2    15    -0.771       -16.9%     40.0%       0.97
+
+  Week 3    15    -2.503       -35.0%     20.0%       0.49
+
+  Week 4    15    -1.576       -24.3%     33.3%       0.51
+
+  Week 5     3    -8.302       -23.7%     33.3%       0.51
+
+
+
+  TPET — March 2026 Day-by-Day Log
+
+  ────────────────────────────────────────────────────────────────────────
+
+          Date    Close     Ret%   Range%   VolRatio     Gap%    OvNight%
+
+    2026-03-02  $ 1.120  +166.67    40.86      18.53  +150.00      +69.64  *** BIG
+
+    2026-03-03  $ 1.950   +74.11    29.47       7.87   +69.64       -7.69  *** BIG
+
+    2026-03-04  $ 0.849   -56.46    56.67       2.65    -7.69      +17.20  *** BIG
+
+    2026-03-05  $ 1.590   +87.28   151.26       6.17   +17.20      +32.08  *** BIG
+
+    2026-03-06  $ 1.930   +21.38    27.62       3.36   +32.08      +17.10  *** BIG
+
+    2026-03-09  $ 1.700   -11.92    32.30       1.48   +17.10       +5.00  *** BIG
+
+    2026-03-10  $ 1.560    -8.24    25.21       0.69    +5.00       -1.92
+
+    2026-03-11  $ 1.480    -5.13    14.05       0.38    -1.92      +14.86
+
+    2026-03-12  $ 1.770   +19.59    14.71       0.63   +14.86       -9.60  *** BIG
+
+    2026-03-13  $ 1.520   -14.12     9.37       0.23    -9.60      -11.84  *** BIG
+
+    2026-03-16  $ 1.160   -23.68    14.93       0.26   -11.84       -3.02  *** BIG
+
+    2026-03-17  $ 1.050    -9.48    10.31       0.15    -3.02      +19.05
+
+    2026-03-18  $ 1.110    +5.71    27.20       0.53   +19.05       +7.21
+
+    2026-03-19  $ 1.060    -4.50    16.13       0.23    +7.21       -0.94
+
+    2026-03-20  $ 1.020    -3.77    11.14       0.14    -0.94      -12.25
+
+    2026-03-23  $ 0.850   -16.67    12.29       0.26   -12.25       +3.88  *** BIG
+
+    2026-03-24  $ 0.850    +0.00    12.46       0.17    +3.88       -5.29
+
+    2026-03-25  $ 0.820    -3.53    18.14       0.15    -5.29       +3.90
+
+    2026-03-26  $ 0.802    -2.20    15.61       0.21    +3.90       -0.87
+
+    2026-03-27  $ 0.918   +14.46    30.19       0.20    -0.87       -6.10  *** BIG
+
+    2026-03-30  $ 0.838    -8.71     8.82       0.16    -6.10      -10.50
+
+    2026-03-31  $ 0.690   -17.66    13.47       0.19   -10.50       -8.00  *** BIG
+
+
+
+  MTD return: +64.3%  |  days: 22  |  win: 31.8%
+
+
+
+  EONR — March vs Rest of Year
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Metric                             March       Other        Diff     Ratio
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Intraday range (%)               +14.702      +7.001      +7.701      2.10x  ◄
+
+  Drop from open (%)                +6.324      +3.580      +2.743      1.77x  ◄
+
+  Rise from open (%)                +8.379      +3.421      +4.958      2.45x  ◄
+
+  Open→Close (%)                    +1.456      -0.322      +1.778     -4.52x  ◄
+
+  Overnight return (%)              +0.136      +0.291      -0.156      0.47x  ◄
+
+  Volume ratio (vs 20d)             +1.523      +1.080      +0.443      1.41x  ◄
+
+  Gap from prev close (%)           +0.585      +0.249      +0.336      2.35x  ◄
+
+
+
+  EONR — March by Week
+
+    Week     N   AvgRet%   TotalRet%   WinRate   VolRatio
+
+  Week 1    20    +1.557       +23.9%     35.0%       2.26
+
+  Week 2    20    +9.612      +261.0%     65.0%       2.57
+
+  Week 3    20    -0.614       -17.9%     35.0%       0.97
+
+  Week 4    20    -0.520       -12.9%     40.0%       0.67
+
+  Week 5     6    -5.001       -27.6%      0.0%       0.27
+
+
+
+  EONR — March 2026 Day-by-Day Log
+
+  ────────────────────────────────────────────────────────────────────────
+
+          Date    Close     Ret%   Range%   VolRatio     Gap%    OvNight%
+
+    2026-03-02  $ 0.498   +15.28    21.23      16.19   +31.94      +36.75  *** BIG
+
+    2026-03-03  $ 0.640   +28.51    21.44      12.55   +36.75      -16.25  *** BIG
+
+    2026-03-04  $ 0.512   -20.00    14.37       1.42   -16.25       -0.20  *** BIG
+
+    2026-03-05  $ 0.610   +19.14    44.42       2.21    -0.20      +20.00  *** BIG
+
+    2026-03-06  $ 0.670    +9.84    23.50       3.62   +20.00      +38.36  **VOL
+
+    2026-03-09  $ 0.800   +19.40    51.78       8.67   +38.36      +13.25  *** BIG
+
+    2026-03-10  $ 0.836    +4.50    27.37       1.61   +13.25       -0.48
+
+    2026-03-11  $ 0.890    +6.46    22.84       0.92    -0.48      +15.73
+
+    2026-03-12  $ 1.350   +51.69    43.69       3.54   +15.73       +8.15  *** BIG
+
+    2026-03-13  $ 1.530   +13.33    19.18       2.26    +8.15      -15.03  *** BIG
+
+    2026-03-16  $ 1.340   -12.42    21.54       0.93   -15.03      -14.93  *** BIG
+
+    2026-03-17  $ 1.030   -23.13    18.33       0.67   -14.93       +8.74  *** BIG
+
+    2026-03-18  $ 1.040    +0.97    20.54       0.88    +8.74       +6.73
+
+    2026-03-19  $ 1.060    +1.92    10.81       0.34    +6.73       -3.77
+
+    2026-03-20  $ 1.030    -2.83     9.41       0.33    -3.77      -10.58
+
+    2026-03-23  $ 0.920   -10.68    15.20       0.41   -10.58       +3.59  *** BIG
+
+    2026-03-24  $ 1.020   +10.87    14.38       0.25    +3.59       -6.37  *** BIG
+
+    2026-03-25  $ 0.957    -6.18     8.38       0.18    -6.37       +3.45
+
+    2026-03-26  $ 1.000    +4.49     7.07       0.20    +3.45       +0.00
+
+    2026-03-27  $ 1.070    +7.00    22.00       0.28    +0.00       -1.87
+
+    2026-03-30  $ 1.020    -4.67    12.29       0.30    -1.87       -7.35
+
+    2026-03-31  $ 0.830   -18.63    18.41       0.36    -7.35      -11.73  *** BIG
+
+
+
+  MTD return: +92.1%  |  days: 22  |  win: 63.6%
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §2  STATISTICAL SIGNIFICANCE — March Seasonality
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  TPET
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Full sample  |  N=63  |  mean=+3.155%  |  P(perm)=0.0384  |  P(MW-U)=0.6650
+
+  Bootstrap Sharpe 95% CI: [-3.35, +4.53]
+
+  ⚠  DIVERGENCE: permutation significant, MWU not → likely 2-3 extreme outlier days
+
+     The mean is inflated by outliers; rank distribution is ordinary.
+
+     ↓ Running outlier-robustness check…
+
+
+
+  Outlier-robust (drop top-2 March returns):
+
+  Trimmed      |  N=61  |  mean=-0.905%  |  P(perm)=0.6552  |  P(MW-U)=0.8044
+
+  ✗ VERDICT: Significance COLLAPSES after removing outliers.
+
+     The March 'edge' is driven by 2-3 extreme events, not a structural seasonal.
+
+     This pattern has ZERO predictive value for future Marches.
+
+
+
+  Top-2 March return days:
+
+    2026-03-02  ret=+166.67%
+
+    2026-03-05  ret=+87.28%
+
+
+
+  EONR
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Full sample  |  N=86  |  mean=+1.985%  |  P(perm)=0.0342  |  P(MW-U)=0.3714
+
+  Bootstrap Sharpe 95% CI: [-1.68, +4.19]
+
+  ⚠  DIVERGENCE: permutation significant, MWU not → likely 2-3 extreme outlier days
+
+     The mean is inflated by outliers; rank distribution is ordinary.
+
+     ↓ Running outlier-robustness check…
+
+
+
+  Outlier-robust (drop top-2 March returns):
+
+  Trimmed      |  N=84  |  mean=-0.026%  |  P(perm)=0.4044  |  P(MW-U)=0.5123
+
+  ✗ VERDICT: Significance COLLAPSES after removing outliers.
+
+     The March 'edge' is driven by 2-3 extreme events, not a structural seasonal.
+
+     This pattern has ZERO predictive value for future Marches.
+
+
+
+  Top-2 March return days:
+
+    2024-03-12  ret=+121.19%
+
+    2026-03-12  ret=+51.69%
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §3  TRANSACTION COST ESTIMATION
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  TPET
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Roll spread:    N/A — INVALID (positive autocorr=+0.090 → momentum regime, covariance=0.001511)
+
+  Serial autocorr (lag-1): +0.0902
+
+  CS spread proxy: 6.192%
+
+  Conservative RT: 6.19%  (floor: 2% for microcaps)
+
+
+
+  EONR
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Roll spread:    5.037%
+
+  Serial autocorr (lag-1): -0.0786
+
+  CS spread proxy: 3.996%
+
+  Conservative RT: 5.04%  (floor: 2% for microcaps)
+
+
+
+  Overnight Edge Viability:
+
+  ────────────────────────────────────────────────────────────────────────
+
+  TPET | threshold≥3% | N=498  gross=+1.052%  net=-5.118%  Sharpe(net)=-7.10
+
+  ✗ NOT VIABLE at 6.17% RT cost
+
+  Searching for viable threshold…
+
+  → No threshold up to 25% clears cost hurdle
+
+  EONR | threshold≥6% | N=238  gross=+0.446%  net=-4.584%  Sharpe(net)=-9.22
+
+  ✗ NOT VIABLE at 5.03% RT cost
+
+  Searching for viable threshold…
+
+  → No threshold up to 25% clears cost hurdle
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §4  FUNDAMENTAL FLOOR MODELS
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  EONR — Floor Sensitivity Table  (production=200 bpd)
+
+  ────────────────────────────────────────────────────────────────────────
+
+    WTI $     Hedge 12%     Hedge 25%     Hedge 50%
+
+  ────────────────────────────────────────────────────────────────────────
+
+      55  $     0.223  $     0.243  $     0.281
+
+      60  $     0.268  $     0.281  $     0.307
+
+      65  $     0.313  $     0.319  $     0.332
+
+      70  $     0.358  $     0.358  $     0.358
+
+      75  $     0.403  $     0.396  $     0.383
+
+      80  $     0.448  $     0.434  $     0.409
+
+      85  $     0.493  $     0.473  $     0.434
+
+
+
+  Note: at WTI ≤ $35/bbl lifting cost, unhedged production is cash-negative.
+
+  The $70/bbl hedge only protects the hedged portion; unhedged 88% has full downside exposure.
+
+
+
+  Current EONR price: $0.804  |  WTI: $98.91
+
+  Estimated fundamental floor: $0.618
+
+  Premium above floor: +30.2%  (above floor — war/optionality premium)
+
+
+
+  TPET — War Premium Decomposition
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Current 5d beta to USO: +1.271x  (normal: ~0.57x)
+
+  Estimated war premium:  +0.0%
+
+  STATUS: 🟠 FADING — premium still unwinding
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §5  TAIL RISK METRICS & KELLY POSITION SIZING
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  TPET
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Annualised return:   +19.1%
+
+  Annualised vol:       205.4%
+
+  VaR (95%):           -12.08%  per day
+
+  CVaR (95%):          -18.67%  per day  (avg loss on worst 5% of days)
+
+  Sortino ratio:        +0.22  (poor)
+
+  Omega ratio:          1.024
+
+
+
+  Kelly Position Sizing:
+
+  Full Kelly:   +0.8% of capital
+
+  Half Kelly:   +0.4% of capital  ← recommended
+
+  ⚠  Very small Kelly fraction — risk/reward barely positive
+
+
+
+  Context: S&P 500 typical Sortino ~0.8–1.2, daily VaR(95) ~-1.5%
+
+  TPET has 8.1x the daily tail risk of the S&P 500 per unit of return.
+
+
+
+  EONR
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Annualised return:   +18.7%
+
+  Annualised vol:       142.5%
+
+  VaR (95%):           -9.36%  per day
+
+  CVaR (95%):          -15.87%  per day  (avg loss on worst 5% of days)
+
+  Sortino ratio:        +0.21  (poor)
+
+  Omega ratio:          1.041
+
+
+
+  Kelly Position Sizing:
+
+  Full Kelly:   +1.4% of capital
+
+  Half Kelly:   +0.7% of capital  ← recommended
+
+  ⚠  Very small Kelly fraction — risk/reward barely positive
+
+
+
+  Context: S&P 500 typical Sortino ~0.8–1.2, daily VaR(95) ~-1.5%
+
+  EONR has 6.2x the daily tail risk of the S&P 500 per unit of return.
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §6  PAIRS COINTEGRATION — TPET / EONR
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  Engle-Granger: COINTEGRATED  (p=0.0001, score=-5.084)
+
+  Hedge ratio:   1.8674x  (long 1 TPET, short 1.8674 EONR)
+
+  Spread mean:   $0.4285  |  std: $5.3391
+
+  Current z-score: -0.233
+
+  Signal: NEUTRAL (within ±2σ band)
+
+
+
+  OU Half-Life:
+
+  21.3 trading days  to half-reversion
+
+  Total RT cost both legs: 11.20%
+
+  Spread must move >11.20% in ~21 days to break even
+
+  ⚠  Long half-life (21d) → high path-risk; spread can stay dislocated
+
+
+
+  Cost-Adjusted Entry Threshold:
+
+  Minimum |z| for entry after costs: 0.13σ
+
+  Current |z|: 0.23σ
+
+  ✓ Current z-score CLEARS the cost-adjusted threshold
+
+
+
+  Rolling Cointegration Stability (90-day windows):
+
+  % of 90d windows cointegrated (p<0.05): 27.5%
+
+  Recent 30-window avg p-value: 0.3055
+
+  ⚠  Relationship is UNSTABLE — cointegration holds in <50% of windows
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §7  CATALYST HUNTING — Big Move Days
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  TPET — All March Days by Absolute Return (top 20)
+
+  ────────────────────────────────────────────────────────────────────────
+
+          Date     Ret%     Gap%    Range%   VolRatio    OvNight%
+
+    2026-03-02  +166.67  +150.00     40.86      18.53      +69.64  ▲ HIGH-VOL GAP+150.0%
+
+    2026-03-05   +87.28   +17.20    151.26       6.17      +32.08  ▲ HIGH-VOL GAP+17.2%
+
+    2026-03-03   +74.11   +69.64     29.47       7.87       -7.69  ▲ HIGH-VOL GAP+69.6%
+
+    2026-03-04   -56.46    -7.69     56.67       2.65      +17.20  ▼ HIGH-VOL GAP-7.7%
+
+    2026-03-16   -23.68   -11.84     14.93       0.26       -3.02  ▼ GAP-11.8%
+
+    2026-03-06   +21.38   +32.08     27.62       3.36      +17.10  ▲ HIGH-VOL GAP+32.1%
+
+    2026-03-12   +19.59   +14.86     14.71       0.63       -9.60  ▲ GAP+14.9%
+
+    2024-03-08   +17.82    +8.91     19.09       3.08       +5.88  ▲ HIGH-VOL GAP+8.9%
+
+    2026-03-31   -17.66   -10.50     13.47       0.19       -8.00  ▼ GAP-10.5%
+
+    2026-03-23   -16.67   -12.25     12.29       0.26       +3.88  ▼ GAP-12.3%
+
+    2025-03-17   +15.54    +1.20     20.47       1.67       -2.07  ▲
+
+    2024-03-01   +14.58    +2.08     18.37       0.66       +4.55  ▲
+
+    2026-03-27   +14.46    -0.87     30.19       0.20       -6.10  ▲
+
+    2026-03-13   -14.12    -9.60      9.37       0.23      -11.84  ▼ GAP-9.6%
+
+    2024-03-27   -12.63    -1.05     17.02       1.01       -2.41  ▼
+
+    2024-03-06   +12.00    -3.00     24.74       5.23       +2.68  ▲ HIGH-VOL
+
+    2026-03-09   -11.92   +17.10     32.30       1.48       +5.00  ▼ GAP+17.1%
+
+    2025-03-04   -10.87    -5.07     19.85       0.84       +1.63  ▼ GAP-5.1%
+
+    2024-03-07    -9.82    +2.68     13.91       1.33       +8.91  ▼
+
+    2026-03-17    -9.48    -3.02     10.31       0.15      +19.05  ▼ GAP-3.0%
+
+
+
+  TPET — Recent March News
+
+  ────────────────────────────────────────────────────────────────────────
+
+  No March news in recent feed
+
+
+
+  EONR — All March Days by Absolute Return (top 20)
+
+  ────────────────────────────────────────────────────────────────────────
+
+          Date     Ret%     Gap%    Range%   VolRatio    OvNight%
+
+    2024-03-12  +121.19    +0.00    201.49      19.81      -12.49  ▲ HIGH-VOL
+
+    2026-03-12   +51.69   +15.73     43.69       3.54       +8.15  ▲ HIGH-VOL GAP+15.7%
+
+    2024-03-13   -31.29   -12.49     43.73       1.15       -5.54  ▼ GAP-12.5%
+
+    2026-03-03   +28.51   +36.75     21.44      12.55      -16.25  ▲ HIGH-VOL GAP+36.7%
+
+    2026-03-17   -23.13   -14.93     18.33       0.67       +8.74  ▼ GAP-14.9%
+
+    2025-03-14   +22.07    +3.27     36.68       2.14       -0.89  ▲ HIGH-VOL GAP+3.3%
+
+    2026-03-04   -20.00   -16.25     14.37       1.42       -0.20  ▼ GAP-16.2%
+
+    2026-03-09   +19.40   +38.36     51.78       8.67      +13.25  ▲ HIGH-VOL GAP+38.4%
+
+    2026-03-05   +19.14    -0.20     44.42       2.21      +20.00  ▲ HIGH-VOL
+
+    2026-03-31   -18.63    -7.35     18.41       0.36      -11.73  ▼ GAP-7.4%
+
+    2025-03-20   +15.89    +2.80     23.64      10.15       -4.84  ▲ HIGH-VOL
+
+    2026-03-02   +15.28   +31.94     21.23      16.19      +36.75  ▲ HIGH-VOL GAP+31.9%
+
+    2026-03-13   +13.33    +8.15     19.18       2.26      -15.03  ▲ HIGH-VOL GAP+8.1%
+
+    2026-03-16   -12.42   -15.03     21.54       0.93      -14.93  ▼ GAP-15.0%
+
+    2026-03-24   +10.87    +3.59     14.38       0.25       -6.37  ▲ GAP+3.6%
+
+    2026-03-23   -10.68   -10.58     15.20       0.41       +3.59  ▼ GAP-10.6%
+
+    2025-03-26   -10.55    -3.22     12.20       0.41       +4.40  ▼ GAP-3.2%
+
+    2025-03-19    +9.86    +1.44     19.23       0.73       +2.80  ▲
+
+    2026-03-06    +9.84   +20.00     23.50       3.62      +38.36  ▲ HIGH-VOL GAP+20.0%
+
+    2024-03-18    +8.97   +10.90     24.57       0.52       -2.35  ▲ GAP+10.9%
+
+
+
+  EONR — Recent March News
+
+  ────────────────────────────────────────────────────────────────────────
+
+  No March news in recent feed
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §8  CROSS-TICKER CORRELATION
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  Correlation Matrix — MARCH only  (N=109)
+
+  ────────────────────────────────────────────────────────────────────────
+
+             TPET     EONR      USO     CL=F      XOP      XLE
+
+    TPET    1.000    0.260    0.432    0.438    0.299    0.191
+
+    EONR    0.260    1.000    0.210    0.248    0.071    0.048
+
+     USO    0.432    0.210    1.000    0.890    0.553    0.551
+
+    CL=F    0.438    0.248    0.890    1.000    0.546    0.555
+
+     XOP    0.299    0.071    0.553    0.546    1.000    0.897
+
+     XLE    0.191    0.048    0.551    0.555    0.897    1.000
+
+
+
+  Correlation Matrix — REST OF YEAR  (N=957)
+
+  ────────────────────────────────────────────────────────────────────────
+
+             TPET     EONR      USO     CL=F      XOP      XLE
+
+    TPET    1.000    0.144    0.102    0.104    0.074    0.066
+
+    EONR    0.144    1.000    0.154    0.134    0.088    0.101
+
+     USO    0.102    0.154    1.000    0.953    0.661    0.659
+
+    CL=F    0.104    0.134    0.953    1.000    0.614    0.618
+
+     XOP    0.074    0.088    0.661    0.614    1.000    0.937
+
+     XLE    0.066    0.101    0.659    0.618    0.937    1.000
+
+
+
+  TPET ↔ EONR Lead-Lag Analysis — March
+
+  ────────────────────────────────────────────────────────────────────────
+
+    Lag       TPET leads EONR       EONR leads TPET
+
+      0                0.2602                0.2602
+
+      1                0.1433               -0.1625
+
+      2               -0.0064               -0.0795
+
+      3               -0.0031                0.0796
+
+      4                0.1782               -0.0496
+
+      5                0.2385               -0.1292
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §9  MONTHLY REGIME ANALYSIS
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  TPET — Monthly Return Regimes (all history)
+
+  ────────────────────────────────────────────────────────────────────────
+
+     Month     N   AvgRet%    TotRet%   WinRate   AvgRange%   AvgVolR   Sharpe
+
+       Jan    61    +0.122      -29.5%     39.3%      13.975     1.109     0.15
+
+       Feb    58    -1.809      -73.1%     29.3%      12.924     1.082    -2.99
+
+       Mar    63    +3.155      +43.4%     36.5%      17.002     1.287     1.80  ◄ MARCH
+
+       Apr    52    +3.860     +197.6%     44.2%      20.875     1.594     2.77
+
+       May    65    -1.133      -56.1%     33.8%       9.195     0.956    -3.59
+
+       Jun    60    +1.530      +79.1%     45.0%      14.235     1.679     2.14
+
+       Jul    64    -1.389      -62.1%     31.2%       7.670     0.545    -4.67
+
+       Aug    66    -0.429      -40.2%     33.3%       9.883     0.997    -0.76
+
+       Sep    61    -0.324      -23.0%     36.1%       8.026     0.985    -1.10
+
+       Oct    68    -0.334      -35.2%     33.8%      10.809     1.851    -0.67
+
+       Nov    60    -2.268      -78.3%     28.3%       9.821     0.671    -5.25
+
+       Dec    63    +0.505       -3.3%     44.4%      11.288     1.328     0.67
+
+
+
+  TPET — March by Year
+
+  ────────────────────────────────────────────────────────────────────────
+
+    Year     N    TotRet%   WinRate   Sharpe
+
+    2024    20      -11.5%     35.0%    -0.59
+
+    2025    21       -1.4%     42.9%     0.22
+
+    2026    22      +64.3%     31.8%     3.16  ◄ THIS YEAR
+
+
+
+  EONR — Monthly Return Regimes (all history)
+
+  ────────────────────────────────────────────────────────────────────────
+
+     Month     N   AvgRet%    TotRet%   WinRate   AvgRange%   AvgVolR   Sharpe
+
+       Jan    81    +0.361       +7.4%     45.7%       8.716     1.418     0.74
+
+       Feb    77    -0.402      -31.4%     39.0%       6.364     0.571    -1.53
+
+       Mar    86    +1.985     +131.5%     40.7%      14.702     1.523     1.88  ◄ MARCH
+
+       Apr    79    -0.087      -15.8%     38.0%       6.974     0.997    -0.27
+
+       May    86    -0.445      -34.2%     27.9%       5.243     0.990    -2.48
+
+       Jun    81    +0.396      +25.1%     39.5%       6.645     1.156     1.27
+
+       Jul    84    -0.179      -17.1%     28.6%       4.484     0.848    -0.95
+
+       Aug    89    -0.236      -25.8%     32.6%       5.475     1.317    -0.86
+
+       Sep    82    -0.238      -26.2%     32.9%       6.382     1.423    -0.74
+
+       Oct    89    +1.217      +56.8%     41.6%       9.754     1.148     1.33
+
+       Nov    81    -1.426      -87.0%     29.6%       9.539     1.055    -1.44
+
+       Dec    84    -0.230      -26.6%     45.2%       7.557     0.897    -0.70
+
+
+
+  EONR — March by Year
+
+  ────────────────────────────────────────────────────────────────────────
+
+    Year     N    TotRet%   WinRate   Sharpe
+
+    2023    23       +0.1%     17.4%     0.39
+
+    2024    20      +37.6%     50.0%     2.26
+
+    2025    21      -12.5%     33.3%    -0.56
+
+    2026    22      +92.1%     63.6%     3.98  ◄ THIS YEAR
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §10  OVERNIGHT EDGE DEEP DIVE
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+  ═════════════════════════════════════════════════════════════════
+
+  TPET — Drop ≥ 3%  |  RT cost = 6.17%
+
+  ═════════════════════════════════════════════════════════════════
+
+  Trades: 498  |  Win: 7.4%  |  EV: -5.118%
+
+  Total: -100.0%  |  Sharpe: -7.10  |  Max DD: -100.0%
+
+
+
+   Thresh      N    WinR    Gross%      Net%   Sharpe     Total%
+
+       1%    654    7.3%    +1.433    -4.737    -5.13     -100.0%
+
+       2%    585    7.2%    +0.961    -5.209    -7.78     -100.0%
+
+       3%    498    7.4%    +1.052    -5.118    -7.10     -100.0%  ◄
+
+       4%    427    8.2%    +1.112    -5.058    -6.56     -100.0%
+
+       5%    354    8.8%    +0.575    -5.595   -10.00     -100.0%
+
+       6%    299    9.7%    +0.729    -5.441    -9.01     -100.0%
+
+       7%    246   10.2%    +0.704    -5.466    -8.57     -100.0%
+
+       8%    199    9.5%    +0.347    -5.823    -8.70     -100.0%
+
+      10%    130    9.2%    -0.511    -6.681   -11.31     -100.0%
+
+      12%     84    9.5%    -1.379    -7.549   -14.94      -99.9%
+
+      15%     44    9.1%    -1.597    -7.767   -15.87      -97.6%
+
+      20%     22   13.6%    -1.134    -7.304   -13.03      -82.8%
+
+      25%     10   10.0%    -2.941    -9.111   -14.86      -63.4%
+
+      30%      5   20.0%    -2.447    -8.617   -11.69      -38.2%
+
+
+
+  Year-by-year:
+
+    Year     N    WinR   AvgRet%      Total%   Sharpe
+
+    2023   136    8.1%    -5.090       -99.9%   -20.82
+
+    2024   178    6.2%    -5.345      -100.0%    -6.53
+
+    2025   137    5.1%    -6.094      -100.0%   -18.59
+
+    2026    47   17.0%    -1.491       -80.0%    -0.95
+
+
+
+  ═════════════════════════════════════════════════════════════════
+
+  EONR — Drop ≥ 6%  |  RT cost = 5.03%
+
+  ═════════════════════════════════════════════════════════════════
+
+  Trades: 238  |  Win: 9.2%  |  EV: -4.584%
+
+  Total: -100.0%  |  Sharpe: -9.22  |  Max DD: -100.0%
+
+
+
+   Thresh      N    WinR    Gross%      Net%   Sharpe     Total%
+
+       1%    548    6.8%    +0.371    -4.659   -11.04     -100.0%
+
+       2%    486    7.0%    +0.413    -4.617   -10.71     -100.0%
+
+       3%    436    6.7%    +0.334    -4.696   -11.12     -100.0%
+
+       4%    370    6.2%    +0.339    -4.691   -10.53     -100.0%
+
+       5%    291    7.6%    +0.247    -4.783   -10.45     -100.0%
+
+       6%    238    9.2%    +0.446    -4.584    -9.22     -100.0%  ◄
+
+       7%    195    9.7%    +0.114    -4.916   -11.61     -100.0%
+
+       8%    157   10.2%    +0.063    -4.967   -10.77     -100.0%
+
+      10%    107   12.1%    +0.391    -4.639    -9.21      -99.6%
+
+      12%     62   16.1%    +0.668    -4.362    -8.31      -94.9%
+
+      15%     40   17.5%    +1.489    -3.541    -6.09      -79.9%
+
+      20%     14    7.1%    -2.080    -7.110   -18.22      -65.4%
+
+      25%     11    9.1%    -1.969    -6.999   -16.33      -56.2%
+
+      30%      7    0.0%    -3.801    -8.831   -27.97      -48.1%
+
+
+
+  Year-by-year:
+
+    Year     N    WinR   AvgRet%      Total%   Sharpe
+
+    2023    18   22.2%    -2.071       -46.8%    -1.70
+
+    2024    97    6.2%    -5.020       -99.4%   -19.16
+
+    2025    97    6.2%    -4.860       -99.3%   -16.11
+
+    2026    26   23.1%    -3.661       -69.4%    -4.38
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  §11  FORWARD SIGNAL MONITOR
+
+  Run date: 2026-04-01 14:35
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+
+
+  ════════════════════════════════════════════════════════════════════
+
+  TPET — CURRENT STATE & FORWARD SIGNALS
+
+  As of: 2026-04-01
+
+  ════════════════════════════════════════════════════════════════════
+
+
+
+  CURRENT STATE
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Price:          $0.686
+
+  Today return:   -0.58%
+
+  Intraday range: 12.4%  (drop=2.3%  rise=10.1%)
+
+  Volume ratio:   0.14x  (vs 20d avg)
+
+  Close in range: 0.84  (0=at low, 1=at high)
+
+  Gap yesterday:  -8.00%
+
+  Beta USO (5d):  +2.38x  |  (20d): +2.60x
+
+  Vol regime:     0.23x  (>1=expanding)
+
+  Momentum:       5d=-16.3%  10d=-38.2%  20d=-19.2%
+
+
+
+  WAR PREMIUM STATUS
+
+  ────────────────────────────────────────────────────────────────────────
+
+  🟡 ELEVATED — war premium intact but moderating (beta=+2.38x)
+
+  ⚠  Note: Phase 2 analysis shows estimated war premium ≈0%. Signals below are cost-adjusted.
+
+
+
+  OIL MACRO CONTEXT
+
+  ────────────────────────────────────────────────────────────────────────
+
+  USO:  $124.09  5d=+9.4%  20d=+35.5%
+
+  WTI:  $98.91  5d=+9.5%
+
+
+
+  FORWARD SIGNALS  (cost-adjusted: RT=6.17%)
+
+  ────────────────────────────────────────────────────────────────────────
+
+  ✓ WAR PREMIUM INTACT — beta 2.38x  (but Phase 2: premium already ~0%)
+
+  ✗ VOLUME DISTRIBUTION — 0.1x normal
+
+
+
+  RECENT 10 DAYS
+
+  ────────────────────────────────────────────────────────────────────────
+
+          Date    Close     Ret%    VolR   Beta5d    OvNight%
+
+    2026-03-19  $ 1.060    -4.50    0.23    +3.18       -0.94
+
+    2026-03-20  $ 1.020    -3.77    0.14    +1.49      -12.25
+
+    2026-03-23  $ 0.850   -16.67    0.26    +1.61       +3.88 ***
+
+    2026-03-24  $ 0.850    +0.00    0.17    +0.97       -5.29
+
+    2026-03-25  $ 0.820    -3.53    0.15    +1.27       +3.90
+
+    2026-03-26  $ 0.802    -2.20    0.21    +1.08       -0.87
+
+    2026-03-27  $ 0.918   +14.46    0.20    +1.15       -6.10 ***
+
+    2026-03-30  $ 0.838    -8.71    0.16    +1.69      -10.50
+
+    2026-03-31  $ 0.690   -17.66    0.19    +1.56       -8.00 ***
+
+    2026-04-01  $ 0.686    -0.58    0.14    +2.38        +nan
+
+
+
+
+
+  ════════════════════════════════════════════════════════════════════
+
+  EONR — CURRENT STATE & FORWARD SIGNALS
+
+  As of: 2026-04-01
+
+  ════════════════════════════════════════════════════════════════════
+
+
+
+  CURRENT STATE
+
+  ────────────────────────────────────────────────────────────────────────
+
+  Price:          $0.804
+
+  Today return:   -3.12%
+
+  Intraday range: 16.4%  (drop=0.4%  rise=16.0%)
+
+  Volume ratio:   0.14x  (vs 20d avg)
+
+  Close in range: 0.62  (0=at low, 1=at high)
+
+  Gap yesterday:  -11.73%
+
+  Beta USO (5d):  +2.43x  |  (20d): +1.56x
+
+  Vol regime:     0.59x  (>1=expanding)
+
+  Momentum:       5d=-16.0%  10d=-22.7%  20d=+57.1%
+
+
+
+  WAR PREMIUM STATUS
+
+  ────────────────────────────────────────────────────────────────────────
+
+  🟡 ELEVATED — war premium intact but moderating (beta=+2.43x)
+
+  ⚠  Note: Phase 2 analysis shows estimated war premium ≈0%. Signals below are cost-adjusted.
+
+
+
+  OIL MACRO CONTEXT
+
+  ────────────────────────────────────────────────────────────────────────
+
+  USO:  $124.09  5d=+9.4%  20d=+35.5%
+
+  WTI:  $98.91  5d=+9.5%
+
+
+
+  FORWARD SIGNALS  (cost-adjusted: RT=5.03%)
+
+  ────────────────────────────────────────────────────────────────────────
+
+  ✓ ACCUMULATION ZONE — $0.804 ≤ $0.90
+
+    Fundamental floor @ WTI=$98.9: $0.618  (current premium above floor: +30.2%)
+
+  ⚡ Q2 DRILLING — 92-well programme should begin (target +500 bbl/day)
+
+  ✓ HEDGE ACTIVE — WTI $99 > $70 floor  (+$29/bbl premium on hedged portion)
+
+
+
+  RECENT 10 DAYS
+
+  ────────────────────────────────────────────────────────────────────────
+
+          Date    Close     Ret%    VolR   Beta5d    OvNight%
+
+    2026-03-19  $ 1.060    +1.92    0.34    +4.33       -3.77
+
+    2026-03-20  $ 1.030    -2.83    0.33    -0.35      -10.58
+
+    2026-03-23  $ 0.920   -10.68    0.41    -0.52       +3.59 ***
+
+    2026-03-24  $ 1.020   +10.87    0.25    -0.15       -6.37 ***
+
+    2026-03-25  $ 0.957    -6.18    0.18    +0.99       +3.45
+
+    2026-03-26  $ 1.000    +4.49    0.20    +1.05       +0.00
+
+    2026-03-27  $ 1.070    +7.00    0.28    +1.25       -1.87
+
+    2026-03-30  $ 1.020    -4.67    0.30    +1.40       -7.35
+
+    2026-03-31  $ 0.830   -18.63    0.36    +1.59      -11.73 ***
+
+    2026-04-01  $ 0.804    -3.12    0.14    +2.43        +nan
+
+
+
+
+
+════════════════════════════════════════════════════════════════════════
+
+  ANALYSIS COMPLETE
+
+  2026-04-01 14:35
+
+  Key reminders:
+
+  • March edge likely driven by outlier days — see §2 robustness check
+
+  • TPET Roll estimator unreliable during momentum; use CS spread (§3)
+
+  • Overnight edge net-negative at current RT costs unless threshold raised (§3/§10)
+
+  • EONR floor ~$0.38 at WTI $72; current price contains optionality/premium (§4)
+
+  • Kelly fraction is small/negative — position sizing must reflect tail risk (§5)
+
+  • Pairs trade: check OU half-life & cost-adjusted z-threshold before entry (§6)
+
+════════════════════════════════════════════════════════════════════════
+
+
+
+======================================================================
+ FINNHUB SENTIMENT ANALYSIS (all stored articles)
+======================================================================
+⚠️  WARNING: 212 high‑variance 'War Premium' signals detected.
+  Price action may be outlier‑driven. Use caution with mean‑reversion.
+
+ticker  score                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  headline
+   USO   20.0                                                                                                                                                                Oil is trading higher amid the ongoing conflict in the Middle East as Israel claims it struck Iranian naval leadership overseeing Strait of Hormuz operations. Iran recently rejected an American ceasefire plan and launched missiles against Israel and other Gulf Arab countries, which prolongs the supply disruption.
+   USO   20.0 'OPEC Oil Output Plunged In March ​to Its Lowest Level Since The ​height Of The Covid-19 Pandemic In ⁠June 2020, A Reuters Survey Found, As ​the U.S.-Israeli War Against Iran Effectively Closed ​the Strait Of Hormuz And Forced Export Cuts; Crude Output By Organization Of The Petroleum Exporting Countries ​members In March Fell By 7.3M Barrels/Day Month-On-Month To 21.57M Barrels/Day, Led By Cuts In Kuwait, Iraq, Saudi Arabia And The United Arab Emirates' - Reuters News
+   USO   17.0                                                                                                                                     Chevron CEO Wirth Says Oil Price Could Stimulate More Us Production Growth Depending On Length Of Conflict; There Is Tightness In Energy Market Due To Closure Of Strait Of Hormuz That Is Not Fully Priced In To Forward Curve; It Is Uncertain How Quickly Shut-in Production In Middle East Can Come Back, 'It Will Take Time To Come Out Of This'
+   USO   15.0                                                                                                                                                                                                                                                                                                                                                                                                                    Iran War Day 19: Fed Decision Day, $95 Oil And Strait Of Hormuz Update
+   USO   15.0                                                                                                                                                                                                                                                                                                                                                                                 Iran's Parliament Speaker Says Ghalibaf The Strait Of Hormuz Situation Won't Return To Its Pre-War Status
+   USO   15.0                                                                                                                                                                                                                                                                                                       Iran's Press TV Citing Official Says Iran Demands Clear Determination And Guaranteed Payment For War Damage; Iran Demands Recognition Of Tehran's Sovereignty Over Strait Of Hormuz
+   USO   15.0                                                                                                                                                                                                      Oil is trading lower amid increased investor focus on a reiteration of Iran's conditions for ending the war, which spurred cautious optimism about conflict de-escalation. Other reports suggest that Iran is not currently negotiating with the US, citing Iran's Foreign Minister.
+   USO   15.0                                                                                                                                                                                                                                                                                                                                                              Iran's Revolutionary Guards Warn Strait Of Hormuz Will Be Completely Closed If Trump Targets Iran Energy Facilities -Reuters
+   USO   15.0                                                                                                                                                                                                                            Iran's IRGIC Issues A Warning Against 18 American Technology Companies, Among Them Microsoft, Apple, Google, Intel, And Boeing, Stating That They Will Be Considered Legitimate Targets In Response To Terrorist Operations Carried Out By The U.S. And Israel
+   USO   15.0                                                                                                                                                                                                                                                                      Iran's Tasnim News Agency Says According To Iranian Sources, Strait Of Hormuz Will Not Return To Pre-War Conditions As Long As 'Pyschological Warfare Continues'; Iran Will Continue To Respond And Defend Territory
+(venv) Enkhjins-MacBook-Pro:Strategy Arena me$ ./venv/bin/python analysis/impact_collector.py 
+
+════════════════════════════════════════════════════════════════
+  HIGHEST-IMPACT DATA COLLECTOR
+  Source: SEC EDGAR (no API key required)
+  Targets: EONR, TPET
+  Lookback: 365 days
+════════════════════════════════════════════════════════════════
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TICKER: EONR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4]  Resolving CIK...
+         ✓ CIK: 0001842556
+
+  [2/4]  Fetching submission history...
+         ✓ Company: EON Resources Inc.
+         ⚠  DILUTION SIGNAL: 1 shelf/S-1 filing(s) found:
+            S-1  filed 2025-08-01  0001213900-25-070636
+         ✓ 15 relevant filings indexed
+
+  [3/4]  Pulling XBRL financial facts...
+         ✓ 7 metrics extracted
+            shares_outstanding                        3.0M  (as of 2023-09-30)
+            shares_authorized                       100.0M  (as of 2023-09-30)
+            warrants_outstanding                      4.0M  (as of 2025-03-31)
+            cash                                   $875.6K  (as of 2025-09-30)
+            long_term_debt                          $4.39M  (as of 2025-09-30)
+            operating_cash_flow                    -$9.52M  (as of 2025-09-30)
+            revenue                                $13.51M  (as of 2025-09-30)
+
+         DILUTION PROFILE:
+            Authorization used:       3.0%  [LOW risk]
+            Authorized headroom:           96,993,750 shares
+            Fully diluted shares:           6,956,250
+            Warrant dilution:         131.4% of current float
+            Est. cash runway:         ~1.1 months  [HIGH risk]
+            Est. monthly burn:        $793.4K/month
+
+  [4/4]  Running full-text search across recent filings...
+
+         [HEDGE_BOOK]
+         Hedging and derivative positions on crude oil production
+         0 matching document(s):
+
+         [PRODUCTION_RATES]
+         Current oil/gas production rates
+         0 matching document(s):
+
+         [DILUTION_INSTRUMENTS]
+         Potential dilution instruments and shelf registration activity
+         1 matching document(s):
+           • ?        | 2025-04-16 | ?
+
+         [CASH_RUNWAY]
+         Cash position, burn rate, and going concern disclosures
+         0 matching document(s):
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TICKER: TPET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4]  Resolving CIK...
+         ✓ CIK: 0001898766
+
+  [2/4]  Fetching submission history...
+         ✓ Company: Trio Petroleum Corp
+         ✓ No shelf registrations in past 365 days
+         ✓ 15 relevant filings indexed
+
+  [3/4]  Pulling XBRL financial facts...
+         ✓ 7 metrics extracted
+            shares_outstanding                       12.8M  (as of 2026-01-31)
+            shares_authorized                       150.0M  (as of 2026-01-31)
+            warrants_outstanding                         0  (as of 2025-10-31)
+            cash                                   $348.7K  (as of 2024-01-31)
+            long_term_debt                         $167.9K  (as of 2026-01-31)
+            operating_cash_flow                   -$533.9K  (as of 2026-01-31)
+            revenue                                 $30.0K  (as of 2025-10-31)
+
+         DILUTION PROFILE:
+            Authorization used:       8.5%  [LOW risk]
+            Authorized headroom:          137,226,084 shares
+            Est. cash runway:         ~7.8 months  [MODERATE risk]
+            Est. monthly burn:        $44.5K/month
+
+  [4/4]  Running full-text search across recent filings...
+
+         [HEDGE_BOOK]
+         Hedging and derivative positions on crude oil production
+         0 matching document(s):
+
+         [PRODUCTION_RATES]
+         Current oil/gas production rates
+         1 matching document(s):
+           • ?        | 2025-04-15 | ?
+
+         [DILUTION_INSTRUMENTS]
+         Potential dilution instruments and shelf registration activity
+         1 matching document(s):
+           • ?        | 2026-03-17 | ?
+
+         [CASH_RUNWAY]
+         Cash position, burn rate, and going concern disclosures
+         2 matching document(s):
+           • ?        | 2025-04-15 | ?
+           • ?        | 2026-01-20 | ?
+
+
+════════════════════════════════════════════════════════════════
+  FINAL SUMMARY — HIGHEST-IMPACT DATA COLLECTOR
+  Run: 2026-04-01 14:37:44
+════════════════════════════════════════════════════════════════
+
+  EONR  (EON Resources Inc.)  CIK: 0001842556
+  ────────────────────────────────────────────────────────
+  Shares Outstanding:      3.0M  (as of 2023-09-30)
+  Shares Authorized:       100.0M  (as of 2023-09-30)
+  Warrants Outstanding:    4.0M  (as of 2025-03-31)
+  Cash:                    $875.6K  (as of 2025-09-30)
+  Long-Term Debt:          $4.39M  (as of 2025-09-30)
+  Op. Cash Flow (ann.):    -$9.52M  (as of 2025-09-30)
+
+  Dilution Risk:   3.0% of authorization used  [LOW]
+  Capital Raise Risk: ~1.1 months runway  [HIGH]
+
+  ⚠  SHELF FILINGS (1):
+     S-1 filed 2025-08-01  |  0001213900-25-070636
+
+  TPET  (Trio Petroleum Corp)  CIK: 0001898766
+  ────────────────────────────────────────────────────────
+  Shares Outstanding:      12.8M  (as of 2026-01-31)
+  Shares Authorized:       150.0M  (as of 2026-01-31)
+  Warrants Outstanding:    0  (as of 2025-10-31)
+  Cash:                    $348.7K  (as of 2024-01-31)
+  Long-Term Debt:          $167.9K  (as of 2026-01-31)
+  Op. Cash Flow (ann.):    -$533.9K  (as of 2026-01-31)
+
+  Dilution Risk:   8.5% of authorization used  [LOW]
+  Capital Raise Risk: ~7.8 months runway  [MODERATE]
+
+  No shelf/S-1 filings in past 365 days
+
+════════════════════════════════════════════════════════════════
+  IMPORTANT LIMITATIONS:
+  1. XBRL data may lag the latest 10-Q by 1–3 weeks.
+  2. Hedge book details are rarely XBRL-tagged — they live in
+     the 'Derivatives and Hedging' footnote of the 10-Q.
+  3. Production rates are almost never XBRL-tagged for micro-
+     caps. Check full-text search results for bopd figures.
+  4. For going concern language, search for 'substantial doubt'
+     in the full-text search results under cash_runway.
+════════════════════════════════════════════════════════════════
+
