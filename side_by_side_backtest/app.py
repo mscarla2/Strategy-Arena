@@ -43,9 +43,15 @@ chart_viewer = st.Page(
     icon="📈",
 )
 
+performance = st.Page(
+    str(_PAGES_DIR / "3_performance.py"),
+    title="Performance Analytics",
+    icon="📊",
+)
+
 # ---------------------------------------------------------------------------
 # Navigation
 # ---------------------------------------------------------------------------
 
-pg = st.navigation([morning_brief, chart_viewer])
+pg = st.navigation([morning_brief, chart_viewer, performance])
 pg.run()

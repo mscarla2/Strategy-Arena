@@ -38,7 +38,7 @@ import optuna
 
 from .models import WatchlistEntry
 from .optimizer import compute_summary
-from .simulator import simulate_all
+from .simulator import simulate_all, build_simulation_caches, SimulationCaches
 
 # Silence optuna's own verbose logging — we print our own progress
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -93,6 +93,7 @@ def auto_tune(
     tune_tolerance: bool = False,   # set True to also optimise pattern tolerance
     objective: str = "expectancy",  # "expectancy" | "profit_factor" | "win_rate"
     seed: int = 42,
+    n_jobs: int = -1,               # Perf 4: parallel trial workers (-1 = all cores)
     verbose: bool = True,
 ) -> AutoTuneResult:
     """
@@ -118,6 +119,22 @@ def auto_tune(
     """
     all_trials: list[dict] = []
 
+    # ── Perf 2+3: Build S/R + pattern caches ONCE before any trials run ───────
+    # This is the expensive step (≈62s for 349 tickers). By hoisting it here,
+    # each of the 100 trials only costs ~3s instead of ~65s.
+    if verbose:
+        print("[auto_tune] Pre-computing S/R levels and pattern maps …")
+    import time as _time
+    _t0 = _time.perf_counter()
+    _caches: SimulationCaches = build_simulation_caches(
+        entries, bars_map,
+        pattern_tolerance_pct=0.01,   # use default; per-trial tolerance only affects entry detection threshold
+        verbose=False,
+    )
+    _t1 = _time.perf_counter()
+    if verbose:
+        print(f"[auto_tune] Cache built in {_t1-_t0:.1f}s — starting {n_trials} trials …")
+
     def _objective(trial: optuna.Trial) -> float:
         pt  = trial.suggest_float("profit_target_pct", pt_low,  pt_high,  log=True)
         sl  = trial.suggest_float("stop_loss_pct",     sl_low,  sl_high,  log=True)
@@ -134,6 +151,7 @@ def auto_tune(
             stop_loss_pct=sl,
             pattern_tolerance_pct=tol,
             verbose=False,
+            caches=_caches,
         )
 
         summary = compute_summary(trades, profit_target_pct=pt, stop_loss_pct=sl)
@@ -186,7 +204,10 @@ def auto_tune(
 
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = optuna.create_study(direction="maximize", sampler=sampler)
-    study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
+    # Perf 4: run trials in parallel across CPU cores.
+    # n_jobs=-1 uses all available cores; each trial calls simulate_all independently.
+    # Note: verbose printing from parallel workers may interleave — acceptable for tuning.
+    study.optimize(_objective, n_trials=n_trials, show_progress_bar=False, n_jobs=n_jobs)
 
     # Pull best params
     best = study.best_params
@@ -194,7 +215,7 @@ def auto_tune(
     best_sl  = best["stop_loss_pct"]
     best_tol = best.get("tolerance", 0.01)
 
-    # Re-simulate with best params to get accurate summary
+    # Re-simulate with best params to get accurate summary (reuse caches)
     best_trades = simulate_all(
         entries,
         bars_map,
@@ -202,6 +223,7 @@ def auto_tune(
         stop_loss_pct=best_sl,
         pattern_tolerance_pct=best_tol,
         verbose=False,
+        caches=_caches,
     )
     best_summary = compute_summary(best_trades, best_pt, best_sl)
 

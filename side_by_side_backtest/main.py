@@ -149,8 +149,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # Quick single-pass parameters
-    p.add_argument("--pt",  type=float, default=2.0, help="Profit target %% for the quick single-pass run")
+    p.add_argument("--pt",  type=float, default=5.0, help="Profit target %% for the quick single-pass run")
     p.add_argument("--sl",  type=float, default=1.0, help="Stop-loss %% for the quick single-pass run")
+
+    # Risk controls
+    p.add_argument(
+        "--max-loss-pct",
+        type=float,
+        default=5.0,
+        help=(
+            "Hard maximum loss cap per trade (%%). Prevents gap-through blowouts "
+            "from exceeding this %% below entry price (default: 5.0)."
+        ),
+    )
+    p.add_argument(
+        "--max-attempts",
+        type=int,
+        default=10,
+        help=(
+            "Max support-touch re-entry attempts per ticker per session window. "
+            "0 = unlimited. Default: 10. Prevents ATPC/AZI-style 100+ attempt churn."
+        ),
+    )
+    p.add_argument(
+        "--no-require-support-ok",
+        action="store_false",
+        dest="require_support_ok",
+        help=(
+            "Disable the support_ok filter — allow trades where price failed to "
+            "respect the support level (legacy behaviour, not recommended)."
+        ),
+    )
+    p.set_defaults(require_support_ok=True)
 
     # Sweep grid
     p.add_argument("--pt-start", type=float, default=0.5,  help="Sweep: PT range start (%%)")
@@ -201,26 +231,74 @@ def phase_parse(args, db) -> list:
 
 
 def phase_fetch(args, entries, db) -> dict:
-    from .data_fetcher import fetch_bars_batch
+    from .data_fetcher import fetch_bars_batch, load_30day_bars
+    import pandas as pd
 
     print(f"\n{'═'*60}")
     print("  PHASE 2 — Fetch 5-Minute OHLCV Bars")
     print(f"{'═'*60}")
 
+    # Strategy:
+    # 1. Fetch per-entry windows (3d lookback + 2d forward around post date)
+    #    → covers the EXACT date the trade would have been live
+    # 2. Supplement with 30d rolling cache (fills gaps, adds recent history)
+    # 3. Merge both so the simulator has the most complete picture
+
+    if args.skip_fetch:
+        # --skip-fetch: load only from 30d parquet + legacy disk cache (no network)
+        bars_map: dict = {}
+        for entry in entries:
+            ticker = entry.ticker
+            if ticker in bars_map:
+                continue
+            cached = load_30day_bars(ticker)
+            if not cached.empty:
+                bars_map[ticker] = cached
+        print(f"[main] --skip-fetch: loaded {len(bars_map)} tickers from disk cache.")
+        return bars_map
+
+    # Step 1: per-entry fetch (historical accuracy)
     bars_map = fetch_bars_batch(
         entries,
         lookback_days=args.lookback_days,
         forward_days=args.forward_days,
         provider=args.provider,
     )
+
+    # Step 2: for each ticker, merge in 30d cache if available.
+    # Deduplicate each frame before concat to avoid InvalidIndexError when
+    # either frame has internal duplicate timestamps (yfinance sometimes returns these).
+    def _safe_dedup(df: pd.DataFrame) -> pd.DataFrame:
+        if df.index.duplicated().any():
+            return df[~df.index.duplicated(keep="last")]
+        return df
+
+    enriched = 0
+    for ticker in list(bars_map.keys()):
+        cached_30d = load_30day_bars(ticker)
+        if not cached_30d.empty:
+            merged = pd.concat([_safe_dedup(bars_map[ticker]), _safe_dedup(cached_30d)])
+            merged = _safe_dedup(merged).sort_index()
+            bars_map[ticker] = merged
+            enriched += 1
+
+    print(f"[main] {len(bars_map)} tickers fetched; {enriched} enriched with 30d cache.")
     return bars_map
 
 
 def phase_single_run(args, entries, bars_map) -> list:
     from .simulator import simulate_all
 
+    max_loss  = getattr(args, "max_loss_pct", 5.0)
+    max_att   = getattr(args, "max_attempts", 0)
+    req_sup   = getattr(args, "require_support_ok", False)
+
     print(f"\n{'═'*60}")
-    print(f"  PHASE 3 — Single-Pass Simulation (PT={args.pt}%  SL={args.sl}%)")
+    print(
+        f"  PHASE 3 — Single-Pass Simulation "
+        f"(PT={args.pt}%  SL={args.sl}%  MAX_LOSS={max_loss}%  "
+        f"MAX_ATT={max_att or '∞'}  REQ_SUP={req_sup})"
+    )
     print(f"{'═'*60}")
 
     trades = simulate_all(
@@ -228,7 +306,10 @@ def phase_single_run(args, entries, bars_map) -> list:
         bars_map,
         profit_target_pct=args.pt,
         stop_loss_pct=args.sl,
+        max_loss_pct=max_loss,
         pattern_tolerance_pct=args.tolerance,
+        require_support_ok=req_sup,
+        max_entry_attempts=max_att,
         verbose=args.verbose,
     )
 
@@ -263,6 +344,9 @@ def phase_sweep(args, entries, bars_map) -> tuple:
     )
 
     # Re-simulate with the best-by-expectancy configuration to get TradeResult list
+    max_loss = getattr(args, "max_loss_pct", 5.0)
+    max_att  = getattr(args, "max_attempts", 0)
+    req_sup  = getattr(args, "require_support_ok", False)
     best_trades: list = []
     best = result.best_by_expectancy
     if best is not None:
@@ -271,7 +355,10 @@ def phase_sweep(args, entries, bars_map) -> tuple:
             bars_map,
             profit_target_pct=best.profit_target_pct,
             stop_loss_pct=best.stop_loss_pct,
+            max_loss_pct=max_loss,
             pattern_tolerance_pct=args.tolerance,
+            require_support_ok=req_sup,
+            max_entry_attempts=max_att,
             verbose=False,
         )
 
@@ -294,12 +381,18 @@ def phase_auto_tune(args, entries, bars_map) -> tuple:
     )
 
     # Re-simulate with best params to produce TradeResult list for report/DB
+    max_loss = getattr(args, "max_loss_pct", 5.0)
+    max_att  = getattr(args, "max_attempts", 0)
+    req_sup  = getattr(args, "require_support_ok", False)
     best_trades = simulate_all(
         entries,
         bars_map,
         profit_target_pct=tune_result.best_pt,
         stop_loss_pct=tune_result.best_sl,
+        max_loss_pct=max_loss,
         pattern_tolerance_pct=tune_result.best_tolerance,
+        require_support_ok=req_sup,
+        max_entry_attempts=max_att,
         verbose=False,
     )
 

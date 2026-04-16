@@ -61,13 +61,17 @@ class PatternMatch(BaseModel):
     """A detected Side-by-Side body pattern at a specific bar index."""
 
     ticker: str
-    ts: datetime  # timestamp of the second (confirming) candle
+    ts: datetime  # timestamp of the completion (C3) candle
     bar_index: int
     candle1_open: float
     candle1_close: float
-    candle2_open: float
-    candle2_close: float
+    candle2_open: float    # C2
+    candle2_close: float   # C2
+    candle3_open: float = 0.0   # C3 (completion candle) — 0.0 for backward compat
+    candle3_close: float = 0.0  # C3
     in_downtrend: bool
+    confidence_score: float = 1.0   # 1.0 = strict S×S, 0.6 = exhaustion, 0.7 = absorption
+    pattern_type: str = "strict"    # "strict" | "exhaustion" | "absorption"
 
 
 class TradeResult(BaseModel):
@@ -85,6 +89,28 @@ class TradeResult(BaseModel):
     pnl_pct: float = 0.0
     hold_bars: int = 0  # number of 5-min bars held
     support_respected: bool = False  # did price stay above support in first 12 bars?
+
+    # ── Analysis tags ────────────────────────────────────────────────────────
+    # support_source: was the support level taken from the watchlist ("watchlist")
+    #   or silently replaced by a computed S/R level ("computed")?
+    support_source: str = "watchlist"   # "watchlist" | "computed"
+
+    # pattern_type: which detector fired the entry signal.
+    # "strict"      = classic 3-candle Side-by-Side White Lines
+    # "exhaustion"  = exhaustion variant (widening spread / doji C3)
+    # "absorption"  = volume-absorption near support
+    # "none"        = no named pattern (bare support touch)
+    pattern_type: str = "none"
+
+    # bars_since_pattern: how many 5-min bars elapsed between the pattern bar
+    # and the entry bar.  0 = entered on the very next bar after the pattern.
+    # High values (≥5) indicate stale pattern — useful for decay analysis.
+    bars_since_pattern: int = 0
+
+    # entry_attempt: 1-based counter of how many times support was touched
+    # within this session before this trade was taken.
+    # 1 = first touch of session, 2 = second touch, etc.
+    entry_attempt: int = 1
 
 
 class BacktestSummary(BaseModel):

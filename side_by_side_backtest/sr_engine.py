@@ -442,3 +442,98 @@ def compute_sr_levels(
         resistances=resistances,
         all_levels=deduped,
     )
+
+
+# ---------------------------------------------------------------------------
+# Role-Reversal Detection
+# ---------------------------------------------------------------------------
+
+def detect_role_reversals(
+    df: pd.DataFrame,
+    level: float,
+    band_pct: float = 0.003,
+    lookback_bars: int = 100,
+    min_closes_above: int = 3,
+) -> bool:
+    """
+    Determine if *level* is a **role-reversal** support — i.e. price previously
+    treated it as resistance (multiple closes above it), then broke through and
+    is now retesting it from above as support.
+
+    Algorithm
+    ---------
+    1. Look at the last `lookback_bars` bars.
+    2. Split into two phases:
+       a. 'Above phase'  — bars where close > level × (1 + band_pct)  ← old resistance
+       b. 'Retest phase' — most-recent bars where close is within band of level
+    3. Returns True if:
+       - There were ≥ min_closes_above closes above the level (resistance was tested)
+       - AND the most recent close is within band_pct of the level (retesting)
+       - AND there was a downward cross back to the level after the above phase
+
+    Parameters
+    ----------
+    df             : 5-min OHLCV DataFrame (UTC DatetimeIndex).
+    level          : The price level to test for role reversal.
+    band_pct       : Proximity band (default 0.3%).
+    lookback_bars  : How many recent bars to examine.
+    min_closes_above: Minimum number of closes that must have been above the level.
+    """
+    if df.empty or level <= 0:
+        return False
+
+    recent = df.iloc[-lookback_bars:] if len(df) >= lookback_bars else df
+    closes = recent["close"].values
+
+    band_hi = level * (1 + band_pct)
+    band_lo = level * (1 - band_pct)
+
+    n_above     = int((closes > band_hi).sum())
+    last_close  = float(closes[-1])
+    near_level  = band_lo <= last_close <= band_hi * 1.01   # within 0.3% on retest
+
+    if n_above < min_closes_above:
+        return False
+
+    # There must be a descent back to the level: find last bar above, then a bar near level
+    last_above_idx = -1
+    for i in range(len(closes) - 1, -1, -1):
+        if closes[i] > band_hi:
+            last_above_idx = i
+            break
+
+    if last_above_idx < 0:
+        return False
+
+    # At least one bar after the last-above must be at or below the level
+    post_above = closes[last_above_idx + 1:]
+    descended  = any(c <= band_hi for c in post_above)
+
+    return descended and near_level
+
+
+def count_rejections(
+    df: pd.DataFrame,
+    level: float,
+    band_pct: float = 0.003,
+    lookback_bars: int = 60,
+) -> int:
+    """
+    Count the number of times price touched *level* (low ≤ level × (1+band))
+    but the bar **closed above** it — i.e. rejection wicks off support.
+
+    Used by the scorer to measure downtrend setup quality:
+    multiple rejections at a support = stronger base for a long entry.
+    """
+    if df.empty or level <= 0:
+        return 0
+
+    recent = df.iloc[-lookback_bars:] if len(df) >= lookback_bars else df
+    touch_band = level * (1 + band_pct)
+    count = 0
+    for _, row in recent.iterrows():
+        touched  = float(row["low"])  <= touch_band
+        rejected = float(row["close"]) > level
+        if touched and rejected:
+            count += 1
+    return count

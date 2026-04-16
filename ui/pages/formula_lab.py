@@ -599,7 +599,7 @@ def render():
         else:
             stop_pct = None
 
-        run_btn = st.button("▶ Run Backtest", type="primary", use_container_width=True)
+        run_btn = st.button("▶ Run Backtest", type="primary", width='stretch')
 
     # ── RIGHT PANEL ────────────────────────────────────────────────────────
     with right_col:
@@ -710,7 +710,7 @@ def render():
 
         # Portfolio value chart
         fig_pv = _build_portfolio_chart(period_results, bench_periods, bench_ticker, base_capital)
-        st.plotly_chart(fig_pv, use_container_width=True)
+        st.plotly_chart(fig_pv, width='stretch')
 
         # Alpha heatmap vs benchmark
         if bench_periods:
@@ -721,10 +721,10 @@ def render():
             ]
             fig_heat = create_alpha_heatmap(norm_results, bench_periods)
             fig_heat.update_layout(title=f"📅 Quarterly Alpha vs {bench_ticker}")
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width='stretch')
 
         # Period details table
         st.subheader("📋 Period Details")
         df_table = _build_period_table(period_results, bench_periods, bench_ticker)
         if not df_table.empty:
-            st.dataframe(df_table, use_container_width=True, hide_index=True)
+            st.dataframe(df_table, width='stretch', hide_index=True)

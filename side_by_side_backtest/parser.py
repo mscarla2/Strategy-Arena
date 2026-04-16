@@ -21,8 +21,19 @@ from .models import RawWatchlist, SessionType, WatchlistEntry
 # OR bare 2-5 uppercase letters followed by a colon (e.g. "AAPL: watch 10")
 _TICKER_RE = re.compile(r"\$([A-Z]{1,5})\b|(?<!\w)([A-Z]{2,5})(?=:)")
 
-# Price levels: optionally preceded by $, followed by optional cent digits
-_PRICE_RE = re.compile(r"\$?\b(\d{1,5}(?:\.\d{1,4})\b)")
+# Price levels: matches $1.08, 1.08, $.85, .7350 style prices
+_PRICE_RE = re.compile(
+    r"\$?(\d{0,5}\.?\d{1,4})\b"  # captures the numeric part
+)
+
+
+def _parse_price(m: re.Match) -> Optional[float]:
+    """Extract and validate a price from a _PRICE_RE match. Returns None if invalid."""
+    try:
+        val = float(m.group(1))
+        return val if 0.001 < val < 100000 else None
+    except (ValueError, TypeError):
+        return None
 
 # Support keywords
 _SUPPORT_KW = re.compile(
@@ -183,7 +194,9 @@ def _prices_near_keyword(
         end = min(len(text), kw_match.end() + window)
         snippet = text[start:end]
         for p_match in _PRICE_RE.finditer(snippet):
-            prices.append(float(p_match.group(1)))
+            val = _parse_price(p_match)
+            if val is not None:
+                prices.append(val)
     return prices
 
 
@@ -266,7 +279,7 @@ def parse_watchlist_post(raw: RawWatchlist) -> List[WatchlistEntry]:
         stop_candidates = _prices_near_keyword(block, _STOP_KW)
 
         # Heuristic: support < current price; resistance > support
-        all_prices = [float(m.group(1)) for m in _PRICE_RE.finditer(block)]
+        all_prices = [v for m in _PRICE_RE.finditer(block) if (v := _parse_price(m)) is not None]
         median_price = sorted(all_prices)[len(all_prices) // 2] if all_prices else 0.0
 
         support = _best_price(

@@ -24,6 +24,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -33,7 +34,7 @@ import pandas as pd
 _PKG = Path(__file__).parent
 _DEFAULT_JSON  = _PKG.parent / "scraped_watchlists.json"
 _POLL_INTERVAL = 300          # seconds between full scans
-_TOUCH_BAND    = 0.001        # price within 0.1% of support = "touched"
+_TOUCH_BAND    = 0.005        # body within 0.5% of support = "touched" (body-based, not wick)
 _PATTERN_BARS  = 30           # last N bars to check for the pattern
 
 # ---------------------------------------------------------------------------
@@ -80,7 +81,14 @@ def _desktop_notify(sc) -> None:
 
 
 def _sound() -> None:
-    """Ring the terminal bell."""
+    """Play effect.mp3 via afplay (macOS), fallback to system bell."""
+    _mp3 = Path(__file__).parent / "effect.mp3"
+    if sys.platform == "darwin" and _mp3.exists():
+        try:
+            subprocess.run(["afplay", str(_mp3)], check=False, timeout=5)
+            return
+        except Exception:
+            pass
     print("\a", end="", flush=True)
 
 
@@ -133,10 +141,13 @@ def _check_ticker(entry) -> Optional[object]:
     if bars.empty or len(bars) < 3:
         return None
 
-    # Touch check: last bar's low ≤ support × (1 + band)
-    last_low = float(bars["low"].iloc[-1])
-    if last_low > support * (1 + _TOUCH_BAND):
-        return None   # price hasn't reached support yet
+    # Touch check: last bar's BODY low ≤ support × (1 + band)
+    # Trader rule: "it's the bodies not the wicks"
+    last_open  = float(bars["open"].iloc[-1])
+    last_close = float(bars["close"].iloc[-1])
+    body_low   = min(last_open, last_close)
+    if body_low > support * (1 + _TOUCH_BAND):
+        return None   # candle body hasn't reached support yet
 
     # Pattern check on last N bars
     recent = bars.iloc[-_PATTERN_BARS:]
@@ -152,25 +163,46 @@ def _check_ticker(entry) -> Optional[object]:
 # Scan loop
 # ---------------------------------------------------------------------------
 
-def scan_once(json_path: str) -> int:
-    """Run one full scan pass. Returns number of alerts fired."""
+# Maximum concurrent ticker checks per scan pass.
+# Each check does one yfinance HTTP request + pattern/score work.
+_SCAN_WORKERS = 8
+
+
+def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS) -> int:
+    """
+    Run one full scan pass in parallel. Returns number of alerts fired.
+
+    Parameters
+    ----------
+    max_workers : int
+        Concurrent ticker-check threads (default 8).
+    """
     entries = _load_entries(json_path)
     if not entries:
         print("[scanner] No entries to scan.")
         return 0
 
-    fired = 0
-    for entry in entries:
-        sc = _check_ticker(entry)
-        if sc is not None:
-            _banner(sc)
-            _desktop_notify(sc)
-            _sound()
-            fired += 1
+    alerts = []
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(entries))) as pool:
+        futures = {pool.submit(_check_ticker, entry): entry for entry in entries}
+        for fut in as_completed(futures):
+            try:
+                sc = fut.result()
+            except Exception:
+                sc = None
+            if sc is not None:
+                alerts.append(sc)
+
+    # Fire alerts sequentially so sounds/notifications don't overlap
+    for sc in alerts:
+        _banner(sc)
+        _desktop_notify(sc)
+        _sound()
 
     ts = datetime.now(tz=timezone.utc).strftime("%H:%M:%S UTC")
-    print(f"[scanner] {ts} — scanned {len(entries)} tickers, {fired} alert(s).")
-    return fired
+    print(f"[scanner] {ts} — scanned {len(entries)} tickers, {len(alerts)} alert(s).")
+    return len(alerts)
 
 
 def run_loop(json_path: str, interval: int) -> None:
