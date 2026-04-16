@@ -310,7 +310,10 @@ def run() -> None:
             st.error("No cached OHLCV data found. Run the backtest pipeline first.")
             return
 
-        ticker = st.selectbox("Ticker", sorted(cache.keys()), key="ticker")
+        _tickers = sorted(cache.keys())
+        _preselect = st.session_state.pop("chart_ticker", None)
+        _default_idx = _tickers.index(_preselect) if _preselect in _tickers else 0
+        ticker = st.selectbox("Ticker", _tickers, index=_default_idx, key="ticker")
         n_windows = len(cache.get(ticker, []))
         st.caption(f"{n_windows} date window(s) available — showing full merged history")
 

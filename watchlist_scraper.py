@@ -70,7 +70,34 @@ async def scrape_user_watchlists(username):
 
 
 if __name__ == "__main__":
-    data = asyncio.run(scrape_user_watchlists("Prestigious_Garlic_9"))
-    with open("scraped_watchlists.json", "w") as f:
-        json.dump(data, f, indent=4)
-    print(f"Done! Extracted {len(data)} watchlists.")
+    import os
+
+    OUTPUT = "scraped_watchlists.json"
+    new_data = asyncio.run(scrape_user_watchlists("Prestigious_Garlic_9"))
+
+    # Load existing records so we never lose historical posts
+    existing: list = []
+    if os.path.exists(OUTPUT):
+        try:
+            with open(OUTPUT) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            existing = []
+
+    # Deduplicate: key = (title, timestamp) — same logic as the scraper
+    def _key(entry: dict) -> str:
+        return f"{entry.get('title','')}::{entry.get('timestamp','')}"
+
+    seen = {_key(e) for e in existing}
+    added = 0
+    for entry in new_data:
+        k = _key(entry)
+        if k not in seen:
+            existing.append(entry)
+            seen.add(k)
+            added += 1
+
+    with open(OUTPUT, "w") as f:
+        json.dump(existing, f, indent=4)
+
+    print(f"Done! {added} new watchlist(s) added. Total: {len(existing)}.")
