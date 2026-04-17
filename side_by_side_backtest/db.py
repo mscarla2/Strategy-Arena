@@ -42,9 +42,24 @@ CREATE TABLE IF NOT EXISTS trades (
     outcome             TEXT NOT NULL DEFAULT 'open',
     pnl_pct             REAL NOT NULL DEFAULT 0.0,
     hold_bars           INTEGER NOT NULL DEFAULT 0,
-    support_respected   INTEGER NOT NULL DEFAULT 0
+    support_respected   INTEGER NOT NULL DEFAULT 0,
+    -- Analysis tags (added in Phase A migration — safe to add to existing DBs)
+    support_source      TEXT NOT NULL DEFAULT 'watchlist',
+    pattern_type        TEXT NOT NULL DEFAULT 'none',
+    bars_since_pattern  INTEGER NOT NULL DEFAULT 0,
+    entry_attempt       INTEGER NOT NULL DEFAULT 1
 );
 """
+
+# Migration: add analysis-tag columns to existing databases that pre-date Phase A.
+# Each ALTER TABLE is guarded by a try/except so it's safe to run on a fresh DB
+# (which already has the columns from _CREATE_DDL) and on any legacy DB.
+_MIGRATION_DDL = [
+    "ALTER TABLE trades ADD COLUMN support_source     TEXT    NOT NULL DEFAULT 'watchlist'",
+    "ALTER TABLE trades ADD COLUMN pattern_type       TEXT    NOT NULL DEFAULT 'none'",
+    "ALTER TABLE trades ADD COLUMN bars_since_pattern INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE trades ADD COLUMN entry_attempt      INTEGER NOT NULL DEFAULT 1",
+]
 
 
 class WatchlistDB:
@@ -64,6 +79,14 @@ class WatchlistDB:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._conn.executescript(_CREATE_DDL)
+        # Run schema migrations — safe on both new and legacy DBs.
+        # SQLite raises OperationalError "duplicate column name" if the column
+        # already exists; we catch that and move on.
+        for stmt in _MIGRATION_DDL:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists — skip
         self._conn.commit()
         return self
 
@@ -160,7 +183,7 @@ class WatchlistDB:
     # ------------------------------------------------------------------
 
     def insert_trades(self, trades: list) -> None:
-        """Bulk-insert TradeResult objects."""
+        """Bulk-insert TradeResult objects (including analysis-tag columns)."""
         from .models import TradeResult  # local import to avoid circular
 
         rows = [
@@ -177,6 +200,10 @@ class WatchlistDB:
                 t.pnl_pct,
                 t.hold_bars,
                 int(t.support_respected),
+                getattr(t, "support_source", "watchlist"),
+                getattr(t, "pattern_type", "none"),
+                getattr(t, "bars_since_pattern", 0),
+                getattr(t, "entry_attempt", 1),
             )
             for t in trades
             if isinstance(t, TradeResult)
@@ -186,12 +213,18 @@ class WatchlistDB:
             INSERT INTO trades
                 (ticker, entry_ts, entry_price, exit_ts, exit_price,
                  profit_target_pct, stop_loss_pct, session_type,
-                 outcome, pnl_pct, hold_bars, support_respected)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 outcome, pnl_pct, hold_bars, support_respected,
+                 support_source, pattern_type, bars_since_pattern, entry_attempt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
         self.conn.commit()
+
+    def upsert_trades(self, trades: list) -> None:
+        """Clear existing trades and re-insert. Safe to call after every simulation run."""
+        self.clear_trades()
+        self.insert_trades(trades)
 
     def clear_trades(self) -> None:
         self.conn.execute("DELETE FROM trades")
@@ -212,6 +245,9 @@ class WatchlistDB:
 
         results = []
         for row in rows:
+            # Safely read analysis-tag columns — default to legacy values for
+            # rows written before Phase A migration so old data stays usable.
+            row_keys = row.keys()
             results.append(
                 TradeResult(
                     ticker=row["ticker"],
@@ -226,6 +262,10 @@ class WatchlistDB:
                     pnl_pct=row["pnl_pct"],
                     hold_bars=row["hold_bars"],
                     support_respected=bool(row["support_respected"]),
+                    support_source=row["support_source"] if "support_source" in row_keys else "watchlist",
+                    pattern_type=row["pattern_type"] if "pattern_type" in row_keys else "none",
+                    bars_since_pattern=row["bars_since_pattern"] if "bars_since_pattern" in row_keys else 0,
+                    entry_attempt=row["entry_attempt"] if "entry_attempt" in row_keys else 1,
                 )
             )
         return results

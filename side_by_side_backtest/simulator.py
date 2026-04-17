@@ -231,6 +231,7 @@ def simulate_entry(
     trailing_stop_pct: Optional[float] = None,
     trail_activation_pct: float = 1.0,
     max_entry_attempts: int = 10,
+    eqh_breakout_mode: bool = False,
     # ── Performance: pre-computed caches (passed by simulate_all) ────────────
     precomputed_support: Optional[float] = None,
     precomputed_support_source: Optional[str] = None,
@@ -270,6 +271,15 @@ def simulate_entry(
     """
     if bars.empty:
         return []
+
+    # ── EQH breakout mode — delegate to dedicated simulator ──────────────────
+    if eqh_breakout_mode:
+        return simulate_eqh_breakout(
+            entry, bars,
+            profit_target_pct=profit_target_pct,
+            stop_loss_pct=stop_loss_pct,
+            max_loss_pct=max_loss_pct,
+        )
 
     session = entry.session_type
     ticker  = entry.ticker
@@ -571,6 +581,163 @@ def simulate_entry(
 
 
 # ---------------------------------------------------------------------------
+# EQH Breakout Simulator — runs when eqh_breakout_mode=True
+# ---------------------------------------------------------------------------
+
+def simulate_eqh_breakout(
+    entry: WatchlistEntry,
+    bars: pd.DataFrame,
+    profit_target_pct: float = 5.0,
+    stop_loss_pct: float = 1.0,
+    max_loss_pct: float = 5.0,
+    eqh_open_tolerance_pct: float = 0.02,
+    body_clear_pct: float = 0.003,
+    max_bars_after_pair: int = 5,
+) -> List[TradeResult]:
+    """
+    Simulate the EQH Breakout strategy independently of the bearish S×S mode.
+
+    Entry Logic ("EQH Breakout"):
+      1. Scan bars for an Equal Highs pair (mixed-color, matching opens).
+      2. In the next *max_bars_after_pair* bars, wait for a candle whose
+         BODY closes ABOVE the EQH ceiling by at least body_clear_pct.
+      3. Enter long at the NEXT bar's open.
+
+    Exit Logic (first condition hit):
+      A. Take-Profit:  price >= entry * (1 + profit_target_pct / 100)
+      B. Stop-Loss:    price closes BELOW the EQH ceiling (thesis dead)
+         OR price <= entry * (1 - stop_loss_pct / 100)
+      C. Time-Stop:    forced exit at session close
+
+    Returns a list of TradeResult objects (typically 0 or 1 per session).
+    """
+    from .pattern_engine import detect_equal_highs_pair, detect_eqh_signal
+
+    if bars.empty:
+        return []
+
+    session = entry.session_type
+    ticker  = entry.ticker
+    bars.attrs["ticker"] = ticker
+
+    # Filter to post-timestamp window
+    if entry.post_timestamp is not None:
+        bars = bars[bars.index >= entry.post_timestamp]
+    if bars.empty:
+        return []
+
+    # Detect EQH pairs and breakout signals
+    eqh_pairs   = detect_equal_highs_pair(bars, open_tolerance_pct=eqh_open_tolerance_pct)
+    eqh_signals = detect_eqh_signal(bars, eqh_pairs,
+                                    body_clear_pct=body_clear_pct,
+                                    max_bars_after=max_bars_after_pair)
+
+    results: List[TradeResult] = []
+
+    for sig in eqh_signals:
+        if sig.pattern_type != "eqh_breakout":
+            continue
+
+        eqh_ceiling = sig.eqh_level
+        if eqh_ceiling <= 0:
+            continue
+
+        # Entry: next bar's open after the breakout signal bar
+        entry_idx = sig.bar_index + 1
+        if entry_idx >= len(bars):
+            continue
+
+        entry_ts = bars.index[entry_idx]
+        if _after_session_close(entry_ts, session):
+            continue
+
+        entry_price = float(bars.iloc[entry_idx]["open"])
+        if entry_price <= 0 or entry_price < 0.10:
+            continue
+
+        # TP and SL
+        take_profit  = entry_price * (1 + profit_target_pct / 100)
+        stop_price   = max(
+            entry_price * (1 - stop_loss_pct / 100),
+            eqh_ceiling * 0.998,   # SL just below EQH ceiling (thesis dead if closed below)
+        )
+        hard_loss_floor = entry_price * (1 - max_loss_pct / 100)
+
+        outcome      = "timeout"
+        exit_price: Optional[float] = None
+        exit_ts: Optional[datetime] = None
+        hold_bars    = 0
+        exit_bar_idx = entry_idx
+
+        for j in range(entry_idx + 1, len(bars)):
+            fwd_ts  = bars.index[j]
+            fwd_row = bars.iloc[j]
+            hold_bars += 1
+            exit_bar_idx = j
+
+            if _after_session_close(fwd_ts, session):
+                outcome    = "timeout"
+                exit_price = float(fwd_row["open"])
+                exit_ts    = fwd_ts
+                break
+
+            # Hard max-loss cap
+            if fwd_row["low"] <= hard_loss_floor:
+                outcome    = "loss"
+                exit_price = min(float(fwd_row["open"]), hard_loss_floor)
+                exit_ts    = fwd_ts
+                break
+
+            # Take-profit
+            if fwd_row["high"] >= take_profit:
+                outcome    = "win"
+                exit_price = take_profit
+                exit_ts    = fwd_ts
+                break
+
+            # Stop-loss: price or close below EQH ceiling (thesis invalidated)
+            if fwd_row["low"] <= stop_price:
+                outcome    = "loss"
+                exit_price = min(float(fwd_row["open"]), stop_price)
+                exit_ts    = fwd_ts
+                break
+
+            if float(fwd_row["close"]) < eqh_ceiling:
+                # Closed back below EQH ceiling — breakout failed
+                outcome    = "loss"
+                exit_price = float(fwd_row["close"])
+                exit_ts    = fwd_ts
+                break
+
+        if exit_price is None:
+            exit_price = float(bars.iloc[-1]["close"])
+            exit_ts    = bars.index[-1]
+
+        pnl = (exit_price - entry_price) / entry_price * 100
+
+        results.append(TradeResult(
+            ticker=ticker,
+            entry_ts=entry_ts.to_pydatetime() if hasattr(entry_ts, "to_pydatetime") else entry_ts,
+            entry_price=round(entry_price, 6),
+            exit_ts=exit_ts.to_pydatetime() if hasattr(exit_ts, "to_pydatetime") else exit_ts,
+            exit_price=round(exit_price, 6),
+            profit_target_pct=profit_target_pct,
+            stop_loss_pct=stop_loss_pct,
+            session_type=session,
+            outcome=outcome,
+            pnl_pct=round(pnl, 4),
+            hold_bars=hold_bars,
+            support_respected=True,
+            support_source="computed",
+            pattern_type="eqh_breakout",
+            bars_since_pattern=0,
+            entry_attempt=1,
+        ))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Pre-computation cache (hoisted out of simulate_all for auto-tune reuse)
 # ---------------------------------------------------------------------------
 
@@ -744,6 +911,7 @@ def simulate_all(
     verbose: bool = False,
     log_path: Optional[str] = None,
     caches: Optional["SimulationCaches"] = None,
+    eqh_breakout_mode: bool = False,
 ) -> List[TradeResult]:
     """
     Run simulate_entry for every watchlist entry that has OHLCV data available.
@@ -853,6 +1021,7 @@ def simulate_all(
             strict_pattern_proximity=strict_pattern_proximity,
             pattern_proximity_pct=pattern_proximity_pct,
             max_entry_attempts=max_entry_attempts,
+            eqh_breakout_mode=eqh_breakout_mode,
             precomputed_support=entry_support,
             precomputed_support_source=entry_src,
             precomputed_pattern_map=pat_map,

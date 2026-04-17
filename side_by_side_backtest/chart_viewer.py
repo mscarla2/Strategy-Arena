@@ -36,6 +36,10 @@ _ENTRY_MK    = "#00bcd4"          # cyan triangle-up — entry
 _WIN_MK      = "#26a69a"          # green X — win exit
 _LOSS_MK     = "#ef5350"          # red X — loss exit
 _TIMEOUT_MK  = "#9e9e9e"          # grey — timeout exit
+_EQH_LINE    = "#ffd700"          # gold dashed — EQH ceiling level
+_EQH_MK      = "#ff9800"          # orange square — EQH pair C3 bar
+_EQH_BREAK   = "#00e676"          # bright green up-arrow — EQH breakout
+_EQH_REJECT  = "#ff1744"          # bright red down-arrow — EQH rejection
 
 
 # ── Session boundary helpers (UTC) ───────────────────────────────────────────
@@ -128,12 +132,18 @@ def build_chart(
     df: pd.DataFrame,
     ticker: str = "",
     tz: str = "America/Los_Angeles",  # display timezone for x-axis
+    visible_days: int = 1,            # initial x-window; y-range computed from this window
 ) -> go.Figure:
     """
     Build a Plotly candlestick figure matching the TradingView dark theme.
     Session-background shading is added automatically.
     S/R lines are drawn separately by the caller via sr_engine levels.
     The x-axis is displayed in *tz* (default: America/Los_Angeles = PT).
+
+    Y-axis is initialised to a tight range over the last *visible_days* of data
+    (autorange=False, fixedrange=False so users can still drag).
+    Call inject_yaxis_rescale_js(df, ticker) AFTER st.plotly_chart() to attach
+    a client-side JS listener that rescales y to visible bars on every x change.
     """
     # Convert index to display timezone so chart times match the live indicator
     if df.index.tzinfo is not None:
@@ -162,9 +172,15 @@ def build_chart(
     # ── Session background shading ────────────────────────────────────────────
     _add_session_shading(fig, df)
 
-    # ── Dark theme layout + range-selector buttons ────────────────────────────
-    _x_end   = df.index[-1]
-    _x_start = _x_end - pd.Timedelta(days=1)
+    # ── Tight initial y-range: computed from visible_days window only ─────────
+    _x_end        = df.index[-1]
+    _x_start      = _x_end - pd.Timedelta(days=visible_days)
+    _visible_mask = df.index >= _x_start
+    _view         = df[_visible_mask] if _visible_mask.any() else df
+    _y_lo         = float(_view["low"].min())
+    _y_hi         = float(_view["high"].max())
+    _y_padding    = max((_y_hi - _y_lo) * 0.05, abs(_y_lo) * 0.005)
+    _y_range      = [_y_lo - _y_padding, _y_hi + _y_padding]
 
     fig.update_layout(
         plot_bgcolor=_BG, paper_bgcolor=_BG,
@@ -196,11 +212,14 @@ def build_chart(
         ),
         yaxis=dict(
             gridcolor="#1e2530", showgrid=True, zeroline=False, side="right",
+            autorange=False,
+            fixedrange=False,
+            range=_y_range,
             showspikes=True, spikemode="across",
             spikesnap="cursor", spikecolor="#555555",
             spikethickness=1, spikedash="dot",
         ),
-        margin=dict(l=10, r=60, t=60, b=10),
+        margin=dict(l=10, r=80, t=60, b=10),
         height=580,
         title=dict(text=ticker, font=dict(size=14, color="#eeeeee"), x=0.02),
         hovermode="x",          # "x" (not "x unified") reduces jitter on dense charts
@@ -214,30 +233,98 @@ def build_chart(
     return fig
 
 
+def inject_yaxis_rescale_js(df: pd.DataFrame, ticker: str, tz: str = "America/Los_Angeles") -> None:
+    """
+    Inject a client-side JS snippet that listens for Plotly x-range changes
+    (range-selector buttons, pan, zoom) and rescales the y-axis to fit only
+    the visible candlestick bars — exactly like TradingView's auto-fit.
+
+    Must be called AFTER st.plotly_chart() so the Plotly div exists in the DOM.
+    The OHLC data is embedded as a compact JSON array (ms timestamps) so the
+    rescale runs entirely in the browser with zero server round-trips.
+    """
+    import json as _json
+
+    # Convert to display tz (same as build_chart) so timestamps match the chart
+    df_disp = df.copy()
+    if df_disp.index.tzinfo is not None:
+        df_disp.index = df_disp.index.tz_convert(tz)
+    else:
+        df_disp.index = df_disp.index.tz_localize("UTC").tz_convert(tz)
+
+    # Compact OHLC array: [[ts_ms, low, high], ...]  — only what JS needs
+    ohlc_js = _json.dumps([
+        [int(ts.timestamp() * 1000), round(float(lo), 6), round(float(hi), 6)]
+        for ts, lo, hi in zip(df_disp.index, df_disp["low"], df_disp["high"])
+    ])
+
+    PAD = 0.04   # 4% padding above/below the visible range
+
+    js = f"""
+<script>
+(function() {{
+    const OHLC  = {ohlc_js};   // [[ts_ms, low, high], ...]
+    const PAD   = {PAD};
+    const divId = "main_chart_{ticker}";
+
+    function rescaleY(xStart, xEnd) {{
+        const t0 = new Date(xStart).getTime();
+        const t1 = new Date(xEnd).getTime();
+        let lo = Infinity, hi = -Infinity;
+        for (const [ts, l, h] of OHLC) {{
+            if (ts >= t0 && ts <= t1) {{
+                if (l < lo) lo = l;
+                if (h > hi) hi = h;
+            }}
+        }}
+        if (!isFinite(lo) || !isFinite(hi)) return;
+        const pad = Math.max((hi - lo) * PAD, lo * 0.002);
+        const div = document.getElementById(divId);
+        if (!div) return;
+        Plotly.relayout(div, {{'yaxis.range': [lo - pad, hi + pad], 'yaxis.autorange': false}});
+    }}
+
+    function attachListener() {{
+        const div = document.getElementById(divId);
+        if (!div || !div._fullLayout) {{
+            setTimeout(attachListener, 300);
+            return;
+        }}
+        div.on('plotly_relayout', function(evt) {{
+            const x0 = evt['xaxis.range[0]'] || (evt['xaxis.range'] && evt['xaxis.range'][0]);
+            const x1 = evt['xaxis.range[1]'] || (evt['xaxis.range'] && evt['xaxis.range'][1]);
+            if (x0 && x1) rescaleY(x0, x1);
+        }});
+        // Also fire once on load with the current x-range
+        const layout = div._fullLayout;
+        if (layout && layout.xaxis && layout.xaxis.range) {{
+            rescaleY(layout.xaxis.range[0], layout.xaxis.range[1]);
+        }}
+    }}
+    attachListener();
+}})();
+</script>
+"""
+    components.html(js, height=0)
+
+
 def _add_session_shading(fig: go.Figure, df: pd.DataFrame) -> None:
     """
-    Add session background shading using a single Scattergl trace per session
-    type (pre-market and after-hours) instead of one vrect per run.
+    Add pre-market and after-hours background shading using layout shapes.
 
-    Technique: for each non-regular bar we emit two x-values (bar timestamp
-    repeated) with y=[y_min, y_max] so the filled area covers the full price
-    range, then insert NaN between disjoint runs to break the fill.  Using
-    go.Scattergl (WebGL) keeps the layer count minimal and GPU-accelerated.
+    Using add_shape with yref="paper" means the rectangles span the full
+    chart height (0→1 in paper coordinates) regardless of price scale, and
+    — critically — they are EXCLUDED from Plotly's autorange calculation so
+    they can never force the y-axis to show a wider price range than the
+    visible candles.
     """
     if df.empty:
         return
 
-    y_min = float(df["low"].min())
-    y_max = float(df["high"].max())
-    half_bar = pd.Timedelta("2.5min")  # half a 5-min bar width
+    half_bar = pd.Timedelta("2.5min")
+    labels   = [_session_label(ts) for ts in df.index]
 
-    labels = [_session_label(ts) for ts in df.index]
-
-    # Build x/y arrays for each session type with NaN gaps between runs
-    session_coords: dict[str, tuple[list, list]] = {
-        "pre":   ([], []),
-        "after": ([], []),
-    }
+    _session_colours = {"pre": _PREMARKET, "after": _AFTERHOURS}
 
     i = 0
     while i < len(labels):
@@ -245,46 +332,23 @@ def _add_session_shading(fig: go.Figure, df: pd.DataFrame) -> None:
         if sess == "regular":
             i += 1
             continue
-        # find end of this run
+        # find end of this contiguous run
         j = i
         while j < len(labels) and labels[j] == sess:
             j += 1
 
-        xs, ys = session_coords[sess]
-        # Insert NaN gap separator between previous run and this one
-        if xs:
-            xs.append(None)
-            ys.append(None)
-
-        x0 = df.index[i] - half_bar
-        x1 = df.index[j - 1] + half_bar
-        # Rectangle via 4 corners + closing point
-        xs += [x0, x1, x1, x0, x0]
-        ys += [y_min, y_min, y_max, y_max, y_min]
-        i = j
-
-    _session_colours = {
-        "pre":   _PREMARKET,
-        "after": _AFTERHOURS,
-    }
-    _session_names = {
-        "pre":   "Pre-market",
-        "after": "After-hours",
-    }
-
-    for sess, (xs, ys) in session_coords.items():
-        if not xs:
-            continue
-        fig.add_trace(go.Scattergl(
-            x=xs, y=ys,
-            fill="toself",
+        x0 = (df.index[i]     - half_bar).isoformat()
+        x1 = (df.index[j - 1] + half_bar).isoformat()
+        fig.add_shape(
+            type="rect",
+            xref="x", yref="paper",   # paper y → always full chart height
+            x0=x0, x1=x1,
+            y0=0,   y1=1,
             fillcolor=_session_colours[sess],
             line=dict(width=0),
-            mode="lines",
-            name=_session_names[sess],
-            hoverinfo="skip",
-            showlegend=False,
-        ))
+            layer="below",
+        )
+        i = j
 
 
 # ── Overlay: pattern markers ──────────────────────────────────────────────────
@@ -313,7 +377,7 @@ def add_pattern_overlays(
     for p in patterns:
         if p.bar_index < len(df_disp):
             xs.append(df_disp.index[p.bar_index])
-            ys.append(float(df_disp["high"].iloc[p.bar_index]) * 1.005)
+            ys.append(float(df_disp["high"].iloc[p.bar_index]))  # no offset — avoids autorange expansion
             ptype = getattr(p, 'pattern_type', 'strict')
             conf  = getattr(p, 'confidence_score', 1.0)
             texts.append(
@@ -328,6 +392,127 @@ def add_pattern_overlays(
         name="Pattern", hovertext=texts, hoverinfo="text",
         showlegend=True,
     ))
+    return fig
+
+
+# ── Overlay: EQH (Equal Highs / Liquidity Ceiling) ────────────────────────────
+
+def add_eqh_overlays(
+    fig: go.Figure,
+    eqh_pairs: list,
+    eqh_signals: list,
+    df: pd.DataFrame,
+    display_tz: str = "America/Los_Angeles",
+) -> go.Figure:
+    """
+    Add EQH visual overlays to the chart:
+      • Gold dashed horizontal line at each EQH ceiling level
+      • Orange square marker on each EQH pair C3 bar
+      • Bright green up-arrow on eqh_breakout signal bars
+      • Bright red down-arrow on eqh_rejection signal bars
+
+    Parameters
+    ----------
+    eqh_pairs   : List of PatternMatch with pattern_type="eqh_pair"
+    eqh_signals : List of PatternMatch with pattern_type="eqh_breakout"|"eqh_rejection"
+    df          : OHLCV DataFrame (UTC index, used for timestamp matching)
+    display_tz  : Timezone for x-axis display (must match build_chart tz arg)
+    """
+    if not eqh_pairs and not eqh_signals:
+        return fig
+
+    df_disp = df.copy()
+    if df_disp.index.tzinfo is not None:
+        df_disp.index = df_disp.index.tz_convert(display_tz)
+    else:
+        df_disp.index = df_disp.index.tz_localize("UTC").tz_convert(display_tz)
+
+    # ── EQH pair markers (orange squares) and ceiling lines ──────────────────
+    pair_xs, pair_ys, pair_texts = [], [], []
+    seen_levels: set[float] = set()
+
+    for p in eqh_pairs:
+        if p.bar_index >= len(df_disp):
+            continue
+        bar_ts = df_disp.index[p.bar_index]
+        bar_hi = float(df_disp["high"].iloc[p.bar_index])
+        pair_xs.append(bar_ts)
+        pair_ys.append(bar_hi)
+        pair_texts.append(
+            f"EQH Pair @ ${p.eqh_level:.3f}<br>"
+            f"C2 {p.candle2_open:.3f}→{p.candle2_close:.3f}<br>"
+            f"C3 {p.candle3_open:.3f}→{p.candle3_close:.3f}"
+        )
+
+        # Draw ceiling line (deduplicated by level)
+        level_key = round(p.eqh_level, 3)
+        if level_key > 0 and level_key not in seen_levels:
+            seen_levels.add(level_key)
+            fig.add_shape(
+                type="line",
+                xref="paper", yref="y",
+                x0=0, x1=1,
+                y0=p.eqh_level, y1=p.eqh_level,
+                line=dict(color=_EQH_LINE, width=1.5, dash="dashdot"),
+                layer="above",
+            )
+            fig.add_annotation(
+                xref="paper", yref="y",
+                x=0.01, y=p.eqh_level,
+                text=f"🏛️ EQH ${p.eqh_level:.3f}",
+                showarrow=False,
+                font=dict(size=9, color=_EQH_LINE),
+                bgcolor="rgba(0,0,0,0.5)",
+                bordercolor="rgba(0,0,0,0)",
+                xanchor="left",
+            )
+
+    if pair_xs:
+        fig.add_trace(go.Scattergl(
+            x=pair_xs, y=pair_ys, mode="markers",
+            marker=dict(symbol="square", size=10, color=_EQH_MK,
+                        line=dict(color="#000000", width=1)),
+            name="EQH Pair", hovertext=pair_texts, hoverinfo="text",
+            showlegend=True,
+        ))
+
+    # ── EQH signal markers (breakout / rejection) ────────────────────────────
+    break_xs, break_ys, break_texts = [], [], []
+    reject_xs, reject_ys, reject_texts = [], [], []
+
+    for s in eqh_signals:
+        if s.bar_index >= len(df_disp):
+            continue
+        bar_ts = df_disp.index[s.bar_index]
+        if s.pattern_type == "eqh_breakout":
+            bar_y  = float(df_disp["high"].iloc[s.bar_index])
+            break_xs.append(bar_ts)
+            break_ys.append(bar_y)
+            break_texts.append(f"🟢 EQH Breakout above ${s.eqh_level:.3f}")
+        elif s.pattern_type == "eqh_rejection":
+            bar_y  = float(df_disp["low"].iloc[s.bar_index])
+            reject_xs.append(bar_ts)
+            reject_ys.append(bar_y)
+            reject_texts.append(f"🔴 EQH Rejection at ${s.eqh_level:.3f}")
+
+    if break_xs:
+        fig.add_trace(go.Scattergl(
+            x=break_xs, y=break_ys, mode="markers",
+            marker=dict(symbol="triangle-up", size=14, color=_EQH_BREAK,
+                        line=dict(color="#ffffff", width=1)),
+            name="EQH Breakout", hovertext=break_texts, hoverinfo="text",
+            showlegend=True,
+        ))
+
+    if reject_xs:
+        fig.add_trace(go.Scattergl(
+            x=reject_xs, y=reject_ys, mode="markers",
+            marker=dict(symbol="triangle-down", size=14, color=_EQH_REJECT,
+                        line=dict(color="#ffffff", width=1)),
+            name="EQH Rejection", hovertext=reject_texts, hoverinfo="text",
+            showlegend=True,
+        ))
+
     return fig
 
 
@@ -361,29 +546,27 @@ def add_trade_overlays(fig: go.Figure, trade, df: pd.DataFrame) -> go.Figure:
         tp = trade.entry_price * (1 + trade.profit_target_pct / 100)
         sl = trade.entry_price * (1 - trade.stop_loss_pct / 100)
 
-        # TP line: draw from entry bar to the end of the visible window
-        x_rest = list(df.index[entry_idx:])
-        if x_rest:
-            fig.add_trace(go.Scattergl(
-                x=x_rest, y=[tp] * len(x_rest),
-                mode="lines", line=dict(color=_BULL, width=1.5, dash="dot"),
-                name=f"TP {tp:.3f}", showlegend=True,
-                hovertemplate=f"TP: {tp:.3f}<extra></extra>",
-            ))
-            fig.add_trace(go.Scattergl(
-                x=x_rest, y=[sl] * len(x_rest),
-                mode="lines", line=dict(color=_BEAR, width=1.5, dash="dot"),
-                name=f"SL {sl:.3f}", showlegend=True,
-                hovertemplate=f"SL: {sl:.3f}<extra></extra>",
-            ))
-            # Entry price reference line
-            fig.add_trace(go.Scattergl(
-                x=x_rest, y=[trade.entry_price] * len(x_rest),
-                mode="lines", line=dict(color=_ENTRY_MK, width=1, dash="dash"),
-                name=f"Entry {trade.entry_price:.3f}", showlegend=True,
-                hovertemplate=f"Entry: {trade.entry_price:.3f}<extra></extra>",
-                opacity=0.6,
-            ))
+        # TP / SL / entry lines as layout shapes (excluded from autorange)
+        x0_ts = df.index[entry_idx].isoformat()
+        x1_ts = df.index[-1].isoformat()
+        if x0_ts:
+            fig.add_shape(type="line", xref="x", yref="y",
+                x0=x0_ts, x1=x1_ts, y0=tp, y1=tp,
+                line=dict(color=_BULL, width=1.5, dash="dot"), layer="above")
+            fig.add_shape(type="line", xref="x", yref="y",
+                x0=x0_ts, x1=x1_ts, y0=sl, y1=sl,
+                line=dict(color=_BEAR, width=1.5, dash="dot"), layer="above")
+            fig.add_shape(type="line", xref="x", yref="y",
+                x0=x0_ts, x1=x1_ts, y0=trade.entry_price, y1=trade.entry_price,
+                line=dict(color=_ENTRY_MK, width=1, dash="dash"), layer="above",
+                opacity=0.6)
+            # Annotations use yref="y" — layout annotations do NOT affect autorange
+            fig.add_annotation(xref="paper", yref="y", x=1.01, y=tp,
+                text=f"TP ${tp:.3f}", showarrow=False,
+                font=dict(size=9, color=_BULL), xanchor="left")
+            fig.add_annotation(xref="paper", yref="y", x=1.01, y=sl,
+                text=f"SL ${sl:.3f}", showarrow=False,
+                font=dict(size=9, color=_BEAR), xanchor="left")
 
     # ── Exit marker ───────────────────────────────────────────────────────────
     if exit_idx is not None and trade.exit_price:
@@ -399,19 +582,22 @@ def add_trade_overlays(fig: go.Figure, trade, df: pd.DataFrame) -> go.Figure:
             hoverinfo="text", showlegend=True,
         ))
 
-    # ── Shaded band between entry and exit ────────────────────────────────────
+    # ── Shaded band between entry and exit (layout shape, excluded from autorange) ──
     if entry_idx is not None and exit_idx is not None and trade.exit_price:
         fill_col = "rgba(38,166,154,0.12)" if trade.outcome == "win" else \
                    "rgba(239,83,80,0.12)"  if trade.outcome == "loss" else \
                    "rgba(120,120,120,0.10)"
-        x_band = list(df.index[entry_idx : exit_idx + 1])
-        if x_band:
-            fig.add_trace(go.Scattergl(
-                x=x_band + x_band[::-1],
-                y=[trade.entry_price] * len(x_band) + [trade.exit_price] * len(x_band),
-                fill="toself", fillcolor=fill_col,
-                line=dict(width=0), showlegend=False, hoverinfo="skip",
-            ))
+        fig.add_shape(
+            type="rect",
+            xref="x", yref="y",
+            x0=df.index[entry_idx].isoformat(),
+            x1=df.index[exit_idx].isoformat(),
+            y0=min(trade.entry_price, trade.exit_price),
+            y1=max(trade.entry_price, trade.exit_price),
+            fillcolor=fill_col,
+            line=dict(width=0),
+            layer="below",
+        )
     return fig
 
 
@@ -604,8 +790,14 @@ def run() -> None:
         show_kmeans  = st.checkbox("K-Means levels",   value=False)
 
         st.divider()
-        st.caption("🟡 diamond = pattern  🔵▲ = entry  🟢● = win  🔴✕ = loss\n"
-                   "Color key: 🔵 pivot  🟤 daily  🟦 extrema  🟣 vol-profile  ⬜ kmeans")
+        st.subheader("🏛️ EQH Levels")
+        show_eqh = st.checkbox("Show EQH pairs", value=True,
+                               help="Detect mixed-color equal-open pairs (trader's primary resistance target)")
+
+        st.divider()
+        st.caption("🟡 diamond = S×S pattern  🟠 square = EQH pair  🟢▲ = EQH breakout  🔴▼ = EQH rejection\n"
+                   "🔵▲ = entry  🟢● = win  🔴✕ = loss\n"
+                   "Color key: 🔵 pivot  🟤 daily  🟦 extrema  🟣 vol-profile  ⬜ kmeans  🟡 EQH ceiling")
 
     # ── Live-scan fragment ────────────────────────────────────────────────────
     # All chart rendering runs inside this fragment so only the chart re-runs
@@ -614,6 +806,7 @@ def run() -> None:
     def _chart_fragment(
         _ticker, _pt, _sl, _tolerance, _adx_thresh, _body_mult, _require_gap,
         _show_pivots, _show_daily, _show_extrema, _show_vprofile, _show_kmeans,
+        _show_eqh,
     ):
         import time as _time
         from side_by_side_backtest.data_fetcher import refresh_today as _refresh_today
@@ -631,16 +824,24 @@ def run() -> None:
             st.warning(f"No cached data found for {_ticker}.")
             return
 
-        # ── Ensure package root on sys.path ───────────────────────────────────
-        import sys as _sys, importlib as _il
+        # ── Direct imports — more reliable than importlib under Streamlit hot-reload ──
+        # importlib.import_module() fails when sys.modules is in a partial-reload state
+        # (Streamlit fragment re-executes mid-reload → KeyError on the module name).
+        import sys as _sys
         _pkg_root = str(_PKG_DIR.parent)
         if _pkg_root not in _sys.path:
             _sys.path.insert(0, _pkg_root)
 
+        from side_by_side_backtest.sr_engine import compute_sr_levels as _compute_sr_levels
+        from side_by_side_backtest.pattern_engine import (
+            detect_side_by_side as _detect_side_by_side,
+            detect_equal_highs_pair as _detect_eqh_fn,
+            detect_eqh_signal as _detect_eqh_sig,
+        )
+
         # ── Compute multi-level S/R ───────────────────────────────────────────
-        _sr  = _il.import_module("side_by_side_backtest.sr_engine")
         current_price = float(df["close"].iloc[-1])
-        sr_levels = _sr.compute_sr_levels(
+        sr_levels = _compute_sr_levels(
             df,
             current_price=current_price,
             use_pivots=_show_pivots,
@@ -654,11 +855,16 @@ def run() -> None:
         support    = sr_levels.nearest_support(current_price)    or round(float(df["low"].quantile(0.15)), 4)
         resistance = sr_levels.nearest_resistance(current_price) or round(float(df["high"].quantile(0.85)), 4)
 
+        # ── Filter S/R levels to reasonable range around current price ────────
+        # Prevents S/R lines far outside visible price range from distorting the chart
+        _sr_band = 0.50  # only show S/R within 50% of current price
+        _sr_lo = current_price * (1 - _sr_band)
+        _sr_hi = current_price * (1 + _sr_band)
+        filtered_sr_levels = [lv for lv in sr_levels.all_levels if _sr_lo <= lv.price <= _sr_hi]
+
         # ── Detect patterns ───────────────────────────────────────────────────
-        _pe = _il.import_module("side_by_side_backtest.pattern_engine")
-        detect_side_by_side = _pe.detect_side_by_side
         df.attrs["ticker"] = _ticker
-        patterns = detect_side_by_side(
+        patterns = _detect_side_by_side(
             df,
             tolerance_pct=_tolerance,
             require_downtrend=True,
@@ -667,12 +873,20 @@ def run() -> None:
             require_gap=_require_gap,
         )
 
+        # ── Detect EQH pairs (mixed-color equal-open resistance levels) ───────
+        eqh_pairs: list = []
+        eqh_signals: list = []
+        if _show_eqh:
+            eqh_pairs   = _detect_eqh_fn(df)
+            eqh_signals = _detect_eqh_sig(df, eqh_pairs)
+
         # ── Simulate entry ────────────────────────────────────────────────────
-        _models        = _il.import_module("side_by_side_backtest.models")
-        _sim           = _il.import_module("side_by_side_backtest.simulator")
-        WatchlistEntry = _models.WatchlistEntry
-        SessionType    = _models.SessionType
-        simulate_entry = _sim.simulate_entry
+        # Use direct imports (not importlib) for simulator + models — these modules
+        # contain dataclasses/Pydantic models and are safe to import directly.
+        # importlib.import_module() for these fails under Streamlit hot-reload because
+        # the fragment re-executes while sys.modules is in a partial-reload state.
+        from side_by_side_backtest.models import WatchlistEntry, SessionType
+        from side_by_side_backtest.simulator import simulate_entry
 
         post_ts   = df.index[0].to_pydatetime()
         entry_obj = WatchlistEntry(
@@ -685,10 +899,10 @@ def run() -> None:
             stop_level=round(support * (1 - _sl / 100), 4),
         )
         trade = simulate_entry(entry_obj, df, profit_target_pct=_pt, stop_loss_pct=_sl,
-                               pattern_tolerance_pct=_tolerance)
+                            pattern_tolerance_pct=_tolerance)
 
         # ── Build chart with multi-level S/R ──────────────────────────────────
-        fig = build_chart(df, ticker=_ticker)
+        fig = build_chart(df, ticker=_ticker, visible_days=1)
 
         _colour_map = {
             "pivot_s1": "#4fc3f7", "pivot_s2": "#81d4fa",
@@ -700,35 +914,36 @@ def run() -> None:
             "kmeans": "#b0bec5",
         }
 
-        # ── Consolidate S/R into one Scattergl trace per colour group ─────────
-        # Replacing add_hline (SVG layout shapes redrawn on every zoom) with
-        # WebGL traces that survive GPU-accelerated pan/zoom without reflow.
-        x_start = df.index[0]
-        x_end   = df.index[-1]
-
-        # Group levels by colour so we emit the fewest possible traces
-        from collections import defaultdict as _dd
-        _sr_groups: dict = _dd(lambda: {"x": [], "y": [], "text": []})
-        for lv in sr_levels.all_levels:
+        # ── Draw S/R lines as layout shapes (xref="paper", yref="y") ──────────
+        # Only draw filtered levels within reasonable range of current price.
+        # xref="paper" means the line spans the full chart width regardless of
+        # the current x-range, matching add_hline behaviour visually.
+        for lv in filtered_sr_levels:
             colour = _colour_map.get(lv.method, "#888888")
-            grp = _sr_groups[colour]
             dash   = "dash" if lv.is_support else "dot"
             width  = min(2.5, 0.8 + lv.strength * 0.25)
-            fig.add_hline(
-                y=lv.price,
+            fig.add_shape(
+                type="line",
+                xref="paper", yref="y",
+                x0=0, x1=1,
+                y0=lv.price, y1=lv.price,
                 line=dict(color=colour, width=width, dash=dash),
-                annotation_text=f"${lv.price:.3f}",
-                annotation_position="right",
-                annotation=dict(
-                    font=dict(size=9, color=colour),
-                    bgcolor="rgba(0,0,0,0)",
-                    bordercolor="rgba(0,0,0,0)",
-                    showarrow=False,
-                    xanchor="left",
-                ),
+                layer="above",
+            )
+            fig.add_annotation(
+                xref="paper", yref="y",
+                x=1.01, y=lv.price,
+                text=f"${lv.price:.3f}",
+                showarrow=False,
+                font=dict(size=9, color=colour),
+                bgcolor="rgba(0,0,0,0)",
+                bordercolor="rgba(0,0,0,0)",
+                xanchor="left",
             )
 
         fig = add_pattern_overlays(fig, patterns, df)
+        if _show_eqh:
+            fig = add_eqh_overlays(fig, eqh_pairs, eqh_signals, df)
         if trade:
             fig = add_trade_overlays(fig, trade, df)
 
@@ -740,7 +955,7 @@ def run() -> None:
 
         st.plotly_chart(
             fig,
-            width="stretch",
+            width='stretch',
             key=f"main_chart_{_ticker}",  # stable key = Plotly preserves zoom on re-render
             config={
                 "scrollZoom": True,
@@ -751,12 +966,15 @@ def run() -> None:
             },
         )
 
+        # ── JS y-axis rescale: fires on every x-range change client-side ─────
+        inject_yaxis_rescale_js(df, _ticker)
+
         # ── Metric card ───────────────────────────────────────────────────────
         col1, col2, col3, col4, col5, col6 = st.columns(6)
-        col1.metric("Patterns", len(patterns))
-        col2.metric("S levels",  len(sr_levels.supports))
-        col3.metric("R levels",  len(sr_levels.resistances))
-        col4.metric("Nearest S", f"${support:.3f}")
+        col1.metric("S×S Patterns", len(patterns))
+        col2.metric("EQH Pairs", len(eqh_pairs))
+        col3.metric("Nearest S", f"${support:.3f}")
+        col4.metric("S levels",  len(filtered_sr_levels))
         if trade:
             col5.metric("Outcome", trade.outcome.upper())
             delta_col = "normal" if trade.pnl_pct >= 0 else "inverse"
@@ -785,17 +1003,17 @@ def run() -> None:
 
         with st.expander("📊 Chart Legend"):
             st.markdown("""
-| Color | Line style | Meaning |
-|-------|-----------|---------|
-| 🔵 Cyan dashed | Pivot support S1/S2 |
-| 🔴 Pink dotted | Pivot resistance R1/R2 |
-| 🟠 Orange dashed | Daily session low |
-| 🟥 Red dotted | Daily session high |
-| 🟡 Yellow diamond | Side-by-Side pattern |
-| 🔵 Cyan triangle | Trade entry |
-| 🟢 Green circle | Winning exit |
-| 🔴 Red ✕ | Losing exit |
-""")
+    | Color | Line style | Meaning |
+    |-------|-----------|---------|
+    | 🔵 Cyan dashed | Pivot support S1/S2 |
+    | 🔴 Pink dotted | Pivot resistance R1/R2 |
+    | 🟠 Orange dashed | Daily session low |
+    | 🟥 Red dotted | Daily session high |
+    | 🟡 Yellow diamond | Side-by-Side pattern |
+    | 🔵 Cyan triangle | Trade entry |
+    | 🟢 Green circle | Winning exit |
+    | 🔴 Red ✕ | Losing exit |
+    """)
 
         with st.expander("Raw bar data"):
             st.dataframe(df.tail(50), width='stretch')
@@ -804,6 +1022,7 @@ def run() -> None:
     _chart_fragment(
         ticker, pt, sl, tolerance, adx_thresh, body_mult, require_gap,
         show_pivots, show_daily, show_extrema, show_vprofile, show_kmeans,
+        show_eqh,
     )
 
 

@@ -49,22 +49,116 @@ def _load_trades() -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = [{
-        "ticker":      t.ticker,
-        "entry_ts":    t.entry_ts,
-        "entry_price": t.entry_price,
-        "exit_price":  t.exit_price or t.entry_price,
-        "pnl_pct":     t.pnl_pct,
-        "outcome":     t.outcome,
-        "hold_bars":   t.hold_bars,
-        "session":     t.session_type.value,
-        "pt_pct":      t.profit_target_pct,
-        "sl_pct":      t.stop_loss_pct,
+        "ticker":         t.ticker,
+        "entry_ts":       t.entry_ts,
+        "entry_price":    t.entry_price,
+        "exit_price":     t.exit_price or t.entry_price,
+        "pnl_pct":        t.pnl_pct,
+        "outcome":        t.outcome,
+        "hold_bars":      t.hold_bars,
+        "session":        t.session_type.value,
+        "pt_pct":         t.profit_target_pct,
+        "sl_pct":         t.stop_loss_pct,
+        # Analysis tags — required for pattern-type and entry-attempt breakdowns
+        "pattern_type":   t.pattern_type,
+        "entry_attempt":  t.entry_attempt,
+        "support_source": t.support_source,
+        "bars_since_pattern": t.bars_since_pattern,
     } for t in trades]
 
     df = pd.DataFrame(rows)
     df["entry_ts"] = pd.to_datetime(df["entry_ts"])
     df.sort_values("entry_ts", inplace=True)
     return df
+
+
+# ---------------------------------------------------------------------------
+# Risk metrics helpers
+# ---------------------------------------------------------------------------
+
+def _sharpe(returns: pd.Series, risk_free: float = 0.0) -> float:
+    """Annualised Sharpe ratio from per-trade PnL% returns."""
+    if len(returns) < 2:
+        return 0.0
+    excess = returns - risk_free
+    std = float(excess.std())
+    if std == 0:
+        return 0.0
+    # Assume ~252 trading days, ~4 trades/day max → scale by sqrt(252)
+    return round(float(excess.mean()) / std * (252 ** 0.5), 3)
+
+
+def _sortino(returns: pd.Series, risk_free: float = 0.0) -> float:
+    """Annualised Sortino ratio — penalises only downside volatility."""
+    if len(returns) < 2:
+        return 0.0
+    excess = returns - risk_free
+    downside = excess[excess < 0]
+    if len(downside) == 0:
+        return float("inf")
+    downside_std = float(downside.std())
+    if downside_std == 0:
+        return 0.0
+    return round(float(excess.mean()) / downside_std * (252 ** 0.5), 3)
+
+
+def _max_drawdown(cumulative_pnl: pd.Series) -> float:
+    """Maximum peak-to-trough drawdown as a percentage."""
+    if cumulative_pnl.empty:
+        return 0.0
+    peak = cumulative_pnl.cummax()
+    dd = cumulative_pnl - peak
+    return round(float(dd.min()), 2)
+
+
+def _pattern_type_stats(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-pattern-type breakdown table."""
+    if "pattern_type" not in df.columns or df["pattern_type"].isna().all():
+        return pd.DataFrame()
+    rows = []
+    for ptype, grp in df.groupby("pattern_type"):
+        total = len(grp)
+        wins  = (grp["outcome"] == "win").sum()
+        wr    = wins / total if total else 0
+        avg_pnl = grp["pnl_pct"].mean()
+        rows.append({
+            "Pattern Type":  ptype,
+            "Trades":        total,
+            "Win Rate":      round(wr, 3),
+            "Avg PnL %":     round(float(avg_pnl), 2),
+            "Expectancy":    round(float(wr * grp.loc[grp["outcome"]=="win","pnl_pct"].mean() +
+                                  (1-wr) * grp.loc[grp["outcome"]=="loss","pnl_pct"].mean()
+                                  if (grp["outcome"]=="win").any() and (grp["outcome"]=="loss").any()
+                                  else avg_pnl), 2),
+        })
+    return pd.DataFrame(rows).sort_values("Trades", ascending=False)
+
+
+def _entry_attempt_stats(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-entry-attempt breakdown: 1st touch vs 2nd vs 3rd+."""
+    if "entry_attempt" not in df.columns or df["entry_attempt"].isna().all():
+        return pd.DataFrame()
+    df2 = df.copy()
+    df2["attempt_group"] = df2["entry_attempt"].apply(
+        lambda x: "1st touch" if x == 1 else ("2nd touch" if x == 2 else "3rd+ touch")
+    )
+    rows = []
+    for grp_label, grp in df2.groupby("attempt_group"):
+        total = len(grp)
+        wins  = (grp["outcome"] == "win").sum()
+        wr    = wins / total if total else 0
+        rows.append({
+            "Entry Attempt": grp_label,
+            "Trades":        total,
+            "Win Rate":      round(wr, 3),
+            "Avg PnL %":     round(float(grp["pnl_pct"].mean()), 2),
+        })
+    order = {"1st touch": 0, "2nd touch": 1, "3rd+ touch": 2}
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result["_ord"] = result["Entry Attempt"].map(order)
+        result = result.sort_values("_ord").drop(columns=["_ord"])
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -231,14 +325,39 @@ def main() -> None:
     st.set_page_config(page_title="Performance Analytics", page_icon="📊", layout="wide")
     st.title("📊 Performance Analytics — Backtest Results")
 
-    df = _load_trades()
-    if df.empty:
+    df_all = _load_trades()
+    if df_all.empty:
         st.warning("No trade history found. Run the backtest pipeline first:\n"
                    "```\npython -m side_by_side_backtest.main --watchlist scraped_watchlists.json "
                    "--skip-fetch --auto-tune --n-trials 100 --export\n```")
         return
 
-    m = _overall_metrics(df)
+    # ── Sidebar filters ───────────────────────────────────────────────────────
+    with st.sidebar:
+        st.header("📊 Filters")
+        if "session" in df_all.columns:
+            session_opts = ["All sessions"] + sorted(df_all["session"].dropna().unique().tolist())
+        else:
+            session_opts = ["All sessions"]
+        session_sel = st.selectbox("Session type", session_opts, index=0)
+        outcome_sel = st.selectbox("Outcome filter", ["All outcomes", "win", "loss", "timeout"], index=0)
+
+    # Apply filters
+    df = df_all.copy()
+    if session_sel != "All sessions" and "session" in df.columns:
+        df = df[df["session"] == session_sel]
+    if outcome_sel != "All outcomes":
+        df = df[df["outcome"] == outcome_sel]
+
+    if df.empty:
+        st.warning("No trades match the selected filters.")
+        return
+
+    m       = _overall_metrics(df)
+    sharpe  = _sharpe(df["pnl_pct"])
+    sortino = _sortino(df["pnl_pct"])
+    cum_pnl = df["pnl_pct"].cumsum()
+    mdd     = _max_drawdown(cum_pnl)
 
     # ── Overall metrics ───────────────────────────────────────────────────────
     st.subheader("Overall Summary")
@@ -250,25 +369,72 @@ def main() -> None:
     c5.metric("Avg Win",         f"{m['avg_win']:.2f}%")
     c6.metric("Avg Loss",        f"{m['avg_loss']:.2f}%")
 
-    st.plotly_chart(_equity_curve(df), width="stretch")
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Sharpe Ratio",    sharpe)
+    r2.metric("Sortino Ratio",   sortino)
+    r3.metric("Max Drawdown",    f"{mdd:.2f}%")
+    r4.metric("Total PnL %",     f"{m['total_pnl']:.2f}%")
+
+    st.plotly_chart(_equity_curve(df), width='stretch')
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.plotly_chart(_pnl_histogram(df), width="stretch")
+        st.plotly_chart(_pnl_histogram(df), width='stretch')
 
-    # ── Per-ticker table ──────────────────────────────────────────────────────
     with col_b:
         st.subheader("🏆 Best Plays (by Expectancy)")
         stats = _per_ticker_stats(df)
         st.dataframe(stats, width='stretch', hide_index=True)
 
+    # ── Drawdown curve ────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📉 Drawdown Curve")
+    if not cum_pnl.empty:
+        peak      = cum_pnl.cummax()
+        dd_series = cum_pnl - peak
+        dd_fig    = go.Figure()
+        dd_fig.add_trace(go.Scatter(
+            x=df["entry_ts"].values, y=dd_series.values,
+            fill="tozeroy", fillcolor="rgba(239,83,80,0.25)",
+            line=dict(color="#ef5350", width=1.5),
+            name="Drawdown %",
+        ))
+        dd_fig.update_layout(
+            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+            font=dict(color="#cccccc"), height=200,
+            xaxis=dict(gridcolor="#1e2530"),
+            yaxis=dict(gridcolor="#1e2530", title="Drawdown %"),
+            margin=dict(t=10, b=20),
+        )
+        st.plotly_chart(dd_fig, width='stretch')
+
+    # ── Pattern-type segmentation ─────────────────────────────────────────────
+    st.subheader("🔬 Pattern-Type Breakdown")
+    pt_stats = _pattern_type_stats(df)
+    if pt_stats.empty:
+        st.info("Pattern-type data not yet available — re-run the backtest with the updated pipeline to populate this field.")
+    else:
+        st.dataframe(pt_stats, width='stretch', hide_index=True)
+        st.caption("**strict** = classic S×S | **exhaustion** = doji/widening C3 | **absorption** = volume-absorbed | **eqh_breakout** = EQH ceiling break | **none** = bare support touch")
+
+    # ── Entry-attempt segmentation ────────────────────────────────────────────
+    st.subheader("🎯 Entry Attempt Breakdown")
+    ea_stats = _entry_attempt_stats(df)
+    if ea_stats.empty:
+        st.info("Entry-attempt data not yet available — re-run the backtest to populate this field.")
+    else:
+        st.dataframe(ea_stats, width='stretch', hide_index=True)
+        st.caption("**1st touch** = first support contact of the session — typically the highest-quality setup.")
+
     # ── Deep-link to chart viewer ─────────────────────────────────────────────
+    st.markdown("---")
     st.subheader("Drill into a ticker")
-    top_tickers = stats["Ticker"].tolist()[:20]
-    pick = st.selectbox("Select ticker to view chart", top_tickers, key="perf_ticker")
-    if st.button(f"📈 Open {pick} in Chart Viewer", key="perf_cv"):
-        st.session_state["chart_ticker"] = pick
-        st.switch_page("pages/2_chart_viewer.py")
+    top_tickers = stats["Ticker"].tolist()[:20] if not stats.empty else []
+    if top_tickers:
+        pick = st.selectbox("Select ticker to view chart", top_tickers, key="perf_ticker")
+        if st.button(f"📈 Open {pick} in Chart Viewer", key="perf_cv"):
+            st.session_state["chart_ticker"] = pick
+            st.switch_page("pages/2_chart_viewer.py")
 
     with st.expander("📋 Raw trade log"):
         st.dataframe(df.sort_values("entry_ts", ascending=False), width='stretch')

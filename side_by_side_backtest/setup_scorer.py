@@ -33,6 +33,13 @@ _SR_CACHE_TTL = 300      # seconds to cache compute_sr_levels() per ticker
 _sr_cache: dict = {}     # {ticker: (timestamp, SRLevels)}
 _sr_cache_lock = threading.Lock()   # guards concurrent reads/writes from outer pool
 
+# History cache — all trades loaded from SQLite once per TTL, shared across all tickers.
+# The previous approach opened a fresh connection per ticker per scoring cycle, which
+# could cost 85ms per call (SQLite cold-open latency × N tickers).
+_HISTORY_CACHE_TTL = 60   # seconds — refreshes on each 1-min live-scan cycle
+_history_cache: dict = {}  # {"_all": (timestamp, {ticker: (score, win_rate, n_trades)})}
+_history_cache_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Data class
@@ -58,6 +65,7 @@ class SetupScore:
     macd_score:         float = 0.0   # 0 = hist falling, 1 = rising 1-bar, 2 = rising 3-bar
     rsi_div_score:      float = 0.0   # 0 = none, 1 = partial, 2 = confirmed divergence
     regime_score:       float = 0.0   # 0 = counter-trend, 1 = flat, 2 = aligned down
+    eqh_score:          float = 0.0   # 0 = no EQH pair, 1 = pair found nearby, 2 = approaching/signal fired
 
     # Raw data for the card display
     entry_price:      float = 0.0
@@ -73,6 +81,10 @@ class SetupScore:
     support_broken:   bool  = False   # current price is below the watchlist support level
     support_ok:       bool  = True    # recent closes hold above support (aligns with simulator gate)
     watchlist_note:   str   = ""      # original text from the post
+
+    # EQH (Equal Highs / Liquidity Ceiling) fields
+    eqh_level:        float = 0.0    # EQH ceiling price (0.0 if none found)
+    eqh_signal:       str   = ""     # "" | "approaching" | "eqh_breakout" | "eqh_rejection"
 
     def signal_label(self) -> str:
         """Return coloured signal string based on total score."""
@@ -262,6 +274,63 @@ def _score_confluence(bars: pd.DataFrame, support: Optional[float], ticker: str 
     return 0.0, "no confluence"
 
 
+def _load_all_history(db_path: Optional[str] = None) -> dict:
+    """
+    Load ALL trades from the DB once and return a {ticker: (score, win_rate, n)}
+    lookup dict.  Results are cached in _history_cache for _HISTORY_CACHE_TTL seconds
+    so the expensive SQLite open only happens once per live-scan interval rather than
+    once per ticker (N × 85ms → 1 × 85ms total).
+    """
+    from pathlib import Path
+
+    now_t = _time.monotonic()
+    with _history_cache_lock:
+        cached = _history_cache.get("_all")
+    if cached and (now_t - cached[0]) < _HISTORY_CACHE_TTL:
+        return cached[1]
+
+    # Cache miss — open DB and build the lookup
+    try:
+        from .db import WatchlistDB
+    except (ImportError, KeyError):
+        try:
+            from side_by_side_backtest.db import WatchlistDB
+        except Exception:
+            return {}
+
+    path = db_path or str(Path(__file__).parent / "watchlist_backtest.db")
+    try:
+        with WatchlistDB(path) as db:
+            all_trades = db.load_trades()
+    except Exception:
+        return {}
+
+    # Build per-ticker summary
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for t in all_trades:
+        groups[t.ticker.upper()].append(t)
+
+    lookup: dict = {}
+    for tkr, trades in groups.items():
+        total = len(trades)
+        if total < 3:
+            lookup[tkr] = (0.0, 0.0, total)
+            continue
+        wins = sum(1 for t in trades if t.outcome == "win")
+        wr   = wins / total
+        if wr >= 0.60:
+            lookup[tkr] = (2.0, round(wr, 3), total)
+        elif wr >= 0.30:
+            lookup[tkr] = (1.0, round(wr, 3), total)
+        else:
+            lookup[tkr] = (0.0, round(wr, 3), total)
+
+    with _history_cache_lock:
+        _history_cache["_all"] = (now_t, lookup)
+    return lookup
+
+
 def _score_history(ticker: str, db_path: Optional[str] = None) -> tuple[float, float, int]:
     """
     History score (0–2) from the trade DB win-rate for this ticker.
@@ -269,34 +338,16 @@ def _score_history(ticker: str, db_path: Optional[str] = None) -> tuple[float, f
       1 = win-rate 30–59%
       0 = fewer than 3 trades or win-rate < 30%
     Returns (score, win_rate, total_trades).
+
+    Optimised: loads all trades once per _HISTORY_CACHE_TTL (60s) and caches
+    the per-ticker lookup dict — eliminates the N × SQLite-open overhead.
     """
-    from pathlib import Path
-    try:
-        from .db import WatchlistDB
-    except (ImportError, KeyError):
-        try:
-            from side_by_side_backtest.db import WatchlistDB  # absolute fallback
-        except Exception:
-            return 0.0, 0.0, 0
-
-    path = db_path or str(Path(__file__).parent / "watchlist_backtest.db")
-    try:
-        with WatchlistDB(path) as db:
-            trades = db.load_trades()
-    except Exception:
+    lookup = _load_all_history(db_path)
+    result = lookup.get(ticker.upper())
+    if result is None:
         return 0.0, 0.0, 0
-
-    ticker_trades = [t for t in trades if t.ticker == ticker.upper()]
-    total = len(ticker_trades)
-    if total < 3:
-        return 0.0, 0.0, total
-
-    wins = sum(1 for t in ticker_trades if t.outcome == "win")
-    wr   = wins / total
-    if wr >= 0.60:
-        return 2.0, round(wr, 3), total
-    if wr >= 0.30:
-        return 1.0, round(wr, 3), total
+    score, wr, total = result
+    return score, wr, total
     return 0.0, round(wr, 3), total
 
 
@@ -374,24 +425,35 @@ def _score_relative_volume(bars: pd.DataFrame) -> tuple[float, float]:
     if c1_vol <= 0:
         return 0.0, 0.0
 
-    # Same time-of-day median from earlier bars
+    # ── Vectorised same-TOD comparison (replaces Python list comprehension) ────
+    # Old approach iterated bar-by-bar with .time() calls → O(N) Python overhead.
+    # New approach: use pandas .dt accessor to compute minute-of-day as an integer
+    # Series, then boolean-mask for the historical window in one vectorised op.
     try:
-        c1_ts   = bars.index[c1_pos_in_bars]
-        c1_time = c1_ts.time() if hasattr(c1_ts, 'time') else pd.Timestamp(c1_ts).time()
-        same_tod = [
-            float(bars.iloc[j]["volume"])
-            for j in range(len(bars) - 15)
-            if abs((bars.index[j].time().hour * 60 + bars.index[j].time().minute)
-                   - (c1_time.hour * 60 + c1_time.minute)) <= 5
-        ]
+        c1_ts = bars.index[c1_pos_in_bars]
+        c1_min = c1_ts.hour * 60 + c1_ts.minute   # scalar int
+
+        hist = bars.iloc[: len(bars) - 15]          # historical window (excludes last 15)
+        if hist.empty:
+            return 0.0, 0.0
+
+        # Vectorised minute-of-day for all historical bars
+        hist_idx = hist.index
+        if hasattr(hist_idx, "hour"):
+            bar_mins = hist_idx.hour * 60 + hist_idx.minute  # DatetimeIndex vectorised
+        else:
+            bar_mins = pd.DatetimeIndex(hist_idx).hour * 60 + pd.DatetimeIndex(hist_idx).minute
+
+        mask = (bar_mins - c1_min).abs() <= 5
+        tod_vols = hist["volume"].values[mask]
     except Exception:
         return 0.0, 0.0
 
-    if len(same_tod) < 3:
+    if len(tod_vols) < 3:
         return 0.0, 0.0
 
     import numpy as np
-    median_vol = float(np.median(same_tod))
+    median_vol = float(np.median(tod_vols))
     if median_vol <= 0:
         return 0.0, 0.0
 
@@ -547,6 +609,64 @@ def _compute_support_ok(bars: pd.DataFrame, support: Optional[float]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# EQH (Equal Highs / Liquidity Ceiling) scorer
+# ---------------------------------------------------------------------------
+
+def _score_eqh(
+    bars: pd.DataFrame,
+    current_price: float,
+    eqh_lookback: int = 20,
+    approach_pct: float = 0.005,   # within 0.5% of ceiling = "approaching"
+    nearby_pct:   float = 0.02,    # within 2% = "nearby"
+) -> tuple[float, float, str]:
+    """
+    EQH score (0–2).
+
+    Scans the last *eqh_lookback* bars for Equal Highs pairs using
+    detect_equal_highs_pair(), then checks where the current price sits
+    relative to each detected ceiling.
+
+      2 = EQH pair found AND current price is within *approach_pct* of ceiling
+          OR an eqh_breakout/eqh_rejection signal fired in the lookback window
+      1 = EQH pair found within *nearby_pct* of current price (approaching)
+      0 = No EQH pair found within the lookback window
+
+    Returns (score, eqh_level, eqh_signal).
+      eqh_level  : ceiling price of the most relevant EQH pair (0.0 if none)
+      eqh_signal : "" | "approaching" | "eqh_breakout" | "eqh_rejection"
+    """
+    from .pattern_engine import detect_equal_highs_pair, detect_eqh_signal
+
+    if bars.empty or current_price <= 0:
+        return 0.0, 0.0, ""
+
+    recent = bars.iloc[-eqh_lookback:] if len(bars) >= eqh_lookback else bars
+    eqh_pairs = detect_equal_highs_pair(recent)
+    if not eqh_pairs:
+        return 0.0, 0.0, ""
+
+    # Check for confirmed breakout/rejection signals first
+    signals = detect_eqh_signal(recent, eqh_pairs)
+    for sig in reversed(signals):  # most recent first
+        if sig.pattern_type in ("eqh_breakout", "eqh_rejection"):
+            return 2.0, sig.eqh_level, sig.pattern_type
+
+    # No confirmed signal — pick the EQH pair closest to current price
+    best_pair = min(eqh_pairs, key=lambda p: abs(p.eqh_level - current_price))
+    eqh_ceiling = best_pair.eqh_level
+    if eqh_ceiling <= 0:
+        return 0.0, 0.0, ""
+
+    dist_pct = abs(eqh_ceiling - current_price) / current_price
+
+    if dist_pct <= approach_pct:
+        return 2.0, eqh_ceiling, "approaching"
+    if dist_pct <= nearby_pct:
+        return 1.0, eqh_ceiling, "approaching"
+    return 0.0, eqh_ceiling, ""
+
+
+# ---------------------------------------------------------------------------
 # Public entry-point
 # ---------------------------------------------------------------------------
 
@@ -679,10 +799,12 @@ def score_setup(
     macd_s,  macd_slope             = _score_macd_slope(sb)
     rsi_s,   rsi_div                = _score_rsi_divergence(sb)
     regime_s, regime_desc           = _score_regime(sb)
+    eqh_s,   eqh_lvl, eqh_sig      = _score_eqh(sb, current_price)
 
-    # Max score is now 22 (11 components × 2); normalise to 0–10
-    raw_total = pat_s + adx_s + rr_s + conf_s + hist_s + rr_rev_s + rej_s + rv_s + macd_s + rsi_s + regime_s
-    total     = round(raw_total / 22.0 * 10.0, 2)
+    # Max score is now 24 (12 components × 2); normalise to 0–10
+    raw_total = (pat_s + adx_s + rr_s + conf_s + hist_s + rr_rev_s
+                 + rej_s + rv_s + macd_s + rsi_s + regime_s + eqh_s)
+    total     = round(raw_total / 24.0 * 10.0, 2)
 
     sig = "🟢 STRONG" if total >= 7.0 else ("🟡 WATCH" if total >= 4.0 else "🔴 SKIP")
 
@@ -701,6 +823,7 @@ def score_setup(
         macd_score=macd_s,
         rsi_div_score=rsi_s,
         regime_score=regime_s,
+        eqh_score=eqh_s,
         entry_price=round(entry_price, 4),
         support=round(support, 4) if support else 0.0,
         resistance=round(resistance, 4) if resistance else None,
@@ -714,4 +837,6 @@ def score_setup(
         support_broken=support_broken,
         support_ok=_compute_support_ok(sb, support),
         watchlist_note=entry.raw_text or entry.sentiment_notes,
+        eqh_level=round(eqh_lvl, 4) if eqh_lvl else 0.0,
+        eqh_signal=eqh_sig,
     )

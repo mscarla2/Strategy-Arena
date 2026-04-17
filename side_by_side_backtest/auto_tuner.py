@@ -62,17 +62,35 @@ class AutoTuneResult:
     n_viable_trials: int            # trials with >= min_trades trades
     all_trials: List[dict] = field(default_factory=list)  # raw per-trial data
 
+    # ── Walk-forward OOS fields (populated when validate_oos=True) ────────────
+    oos_expectancy:     Optional[float] = None   # OOS expectancy with best params
+    oos_win_rate:       Optional[float] = None
+    oos_profit_factor:  Optional[float] = None
+    oos_total_trades:   int             = 0
+    oos_split_pct:      float           = 0.0    # fraction used for OOS (e.g. 0.3)
+
     def summary_str(self) -> str:
-        return (
+        s = (
             f"Auto-Tune Result ({self.n_trials} trials, {self.n_viable_trials} viable)\n"
             f"  Best PT       : {self.best_pt:.2f}%\n"
             f"  Best SL       : {self.best_sl:.2f}%\n"
             f"  Best Tolerance: {self.best_tolerance*100:.2f}%\n"
+            f"  ── In-Sample ──────────────────────────\n"
             f"  Expectancy    : {self.best_expectancy:+.4f}\n"
             f"  Win Rate      : {self.best_win_rate:.1%}\n"
             f"  Profit Factor : {self.best_profit_factor:.3f}\n"
             f"  Total Trades  : {self.best_total_trades}\n"
         )
+        if self.oos_expectancy is not None:
+            s += (
+                f"  ── Out-of-Sample ({self.oos_split_pct:.0%} of data) ─────\n"
+                f"  OOS Expectancy  : {self.oos_expectancy:+.4f}"
+                f"{'  ✅ Holds up' if self.oos_expectancy > 0 else '  ⚠️ Degraded'}\n"
+                f"  OOS Win Rate    : {self.oos_win_rate:.1%}\n"
+                f"  OOS Profit Factor: {self.oos_profit_factor:.3f}\n"
+                f"  OOS Trades      : {self.oos_total_trades}\n"
+            )
+        return s
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +113,8 @@ def auto_tune(
     seed: int = 42,
     n_jobs: int = -1,               # Perf 4: parallel trial workers (-1 = all cores)
     verbose: bool = True,
+    validate_oos: bool = False,     # Phase E: run walk-forward OOS check after tuning
+    oos_split: float = 0.30,        # fraction of entries reserved for OOS (default 30%)
 ) -> AutoTuneResult:
     """
     Run Bayesian optimisation over PT / SL (and optionally pattern tolerance).
@@ -242,6 +262,60 @@ def auto_tune(
         n_viable_trials=n_viable,
         all_trials=all_trials,
     )
+
+    # ── Walk-forward OOS validation ───────────────────────────────────────────
+    if validate_oos and entries:
+        # Split entries chronologically: first (1-oos_split) for IS, rest for OOS.
+        # We sort by post_timestamp so the split respects time order.
+        sorted_entries = sorted(
+            [e for e in entries if e.post_timestamp is not None],
+            key=lambda e: e.post_timestamp,
+        )
+        # Any entries without timestamps go to IS
+        no_ts = [e for e in entries if e.post_timestamp is None]
+        all_sorted = no_ts + sorted_entries
+
+        split_idx = max(1, int(len(all_sorted) * (1 - oos_split)))
+        oos_entries = all_sorted[split_idx:]
+
+        if oos_entries and verbose:
+            print(
+                f"\n[auto_tune] Walk-forward OOS: {len(oos_entries)} entries "
+                f"({oos_split:.0%} of total) with best params "
+                f"PT={best_pt:.2f}%  SL={best_sl:.2f}% …"
+            )
+
+        if oos_entries:
+            oos_trades = simulate_all(
+                oos_entries,
+                bars_map,
+                profit_target_pct=best_pt,
+                stop_loss_pct=best_sl,
+                pattern_tolerance_pct=best_tol,
+                verbose=False,
+                caches=_caches,
+            )
+            oos_summary = compute_summary(oos_trades, best_pt, best_sl)
+            result.oos_expectancy    = oos_summary.expectancy
+            result.oos_win_rate      = oos_summary.win_rate
+            result.oos_profit_factor = oos_summary.profit_factor
+            result.oos_total_trades  = oos_summary.total_trades
+            result.oos_split_pct     = oos_split
+
+            if verbose:
+                degraded = (
+                    oos_summary.expectancy < result.best_expectancy * 0.5
+                    and oos_summary.expectancy < 0
+                )
+                flag = "⚠️  POSSIBLE OVERFITTING — OOS significantly worse than IS" if degraded else "✅  OOS results broadly consistent with IS"
+                print(
+                    f"[auto_tune] OOS result: "
+                    f"E={oos_summary.expectancy:+.4f}  "
+                    f"WR={oos_summary.win_rate:.1%}  "
+                    f"PF={oos_summary.profit_factor:.3f}  "
+                    f"trades={oos_summary.total_trades}"
+                )
+                print(f"[auto_tune] {flag}")
 
     if verbose:
         print(f"\n{result.summary_str()}")

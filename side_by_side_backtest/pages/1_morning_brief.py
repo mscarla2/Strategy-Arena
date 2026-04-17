@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 import base64
 import streamlit.components.v1 as components
+import time as _wall_clock   # wall-clock used for refresh-cooldown guard
 
 # ---------------------------------------------------------------------------
 # Alert sound (base64-embedded so no file-serving needed)
@@ -79,25 +80,121 @@ def _parse_posts(raw: List[dict]) -> List[WatchlistEntry]:
     return entries
 
 
+# Module-level refresh-cooldown guard.
+# Tracks the last wall-clock time refresh_today() was called per ticker so we
+# don't hammer yfinance on every fragment tick (default every 60s).
+# Key: ticker str  →  Value: float (monotonic timestamp of last refresh)
+_last_refresh_ts: dict[str, float] = {}
+_REFRESH_COOLDOWN = 55.0   # seconds — slightly less than the 60s scan interval
+
+# Background-refresh state: tracks whether a fire-and-forget refresh is in
+# flight so we don't spawn duplicate threads on rapid Streamlit reruns.
+import threading as _threading
+_bg_refresh_lock   = _threading.Lock()
+_bg_refresh_tickers: set[str] = set()   # tickers currently being refreshed in bg
+
+
+def _prefetch_tickers(
+    tickers: list[str],
+    max_workers: int = 12,
+    background: bool = False,
+) -> None:
+    """
+    Run refresh_today() for all *tickers* in parallel.
+
+    background=False (default, used on subsequent fragment ticks):
+        Blocks until all refreshes complete so the scoring phase immediately
+        sees fresh data.
+
+    background=True (used on first render):
+        Fires a daemon thread and returns immediately — the first render scores
+        from the existing on-disk parquets (~1ms/ticker) without waiting for
+        the network.  The next fragment tick (≥60s later) will find the fresh
+        parquets already written and will call with background=False.
+
+    Refresh-cooldown guard: tickers refreshed within the last _REFRESH_COOLDOWN
+    seconds are skipped entirely, preventing redundant HTTP calls on rapid reruns.
+    """
+    from side_by_side_backtest.data_fetcher import refresh_today
+
+    now = _wall_clock.monotonic()
+    due = [t for t in tickers if now - _last_refresh_ts.get(t, 0) >= _REFRESH_COOLDOWN]
+    if not due:
+        return   # all tickers refreshed recently — nothing to do
+
+    def _refresh_one(ticker: str) -> None:
+        try:
+            refresh_today(ticker)
+            _last_refresh_ts[ticker] = _wall_clock.monotonic()
+        except Exception:
+            pass  # network failure is non-fatal; scoring will use cached data
+        finally:
+            with _bg_refresh_lock:
+                _bg_refresh_tickers.discard(ticker)
+
+    if background:
+        # Only spawn threads for tickers not already being refreshed
+        with _bg_refresh_lock:
+            new_due = [t for t in due if t not in _bg_refresh_tickers]
+            _bg_refresh_tickers.update(new_due)
+        if not new_due:
+            return
+        def _run_bg():
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(new_due))) as pool:
+                futs = [pool.submit(_refresh_one, t) for t in new_due]
+                for fut in as_completed(futs):
+                    try: fut.result()
+                    except Exception: pass
+        t = _threading.Thread(target=_run_bg, daemon=True, name="bg-refresh")
+        t.start()
+    else:
+        n = min(max_workers, len(due))
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            futures = [pool.submit(_refresh_one, t) for t in due]
+            for fut in as_completed(futures):
+                fut.result()  # propagate exceptions silently (already caught inside)
+
+
 def _score_entries_raw(entries_json: str, live_refresh: bool = False,
                        max_workers: int = 8) -> List[SetupScore]:
     """Score each entry in parallel and return a list of SetupScore objects.
 
-    live_refresh=True: call refresh_today() for each ticker (Latest post only, small set).
-    live_refresh=False: use load_30day_bars() only (All history — too many tickers to refresh).
+    First render (is_first_run=True in session_state):
+      Scores immediately from on-disk parquets — no network wait.
+      Fires a background thread to refresh all ticker parquets concurrently.
+      Result: first paint in ~300ms instead of ~600ms+.
 
-    max_workers controls concurrency of per-ticker data fetch + scoring.
-    Each worker also benefits from the parallelized component scorers inside score_setup().
+    Subsequent fragment ticks (live_refresh=True, not first run):
+      Phase 1 — blocks on _prefetch_tickers() (network, parallel, ~150ms for 8 tickers).
+      Phase 2 — scores from freshly-written disk cache.
+
+    When live_refresh=False (All history mode):
+      Skips network entirely — use cached data only.
+
+    max_workers controls concurrency of the CPU scoring phase.
     """
     import json as _json
     entries = [WatchlistEntry(**e) for e in _json.loads(entries_json)]
 
-    def _score_one(entry) -> SetupScore:
-        if live_refresh:
-            from side_by_side_backtest.data_fetcher import refresh_today
-            bars = refresh_today(entry.ticker)
+    unique_tickers = list({e.ticker for e in entries}) if entries else []
+
+    # ── Phase 1: network refresh ──────────────────────────────────────────────
+    if live_refresh and unique_tickers:
+        is_first = not st.session_state.get("_brief_has_scored", False)
+        if is_first:
+            # First render: fire-and-forget so UI paints immediately from disk.
+            # Mark scored now so the next tick uses the blocking path.
+            st.session_state["_brief_has_scored"] = True
+            _prefetch_tickers(unique_tickers, max_workers=max(max_workers, 12),
+                              background=True)
         else:
-            bars = load_30day_bars(entry.ticker)
+            # Subsequent ticks: block until fresh data is ready before scoring.
+            _prefetch_tickers(unique_tickers, max_workers=max(max_workers, 12),
+                              background=False)
+
+    # ── Phase 2: score from disk cache (CPU only, no network) ────────────────
+    def _score_one(entry) -> SetupScore:
+        bars = load_30day_bars(entry.ticker)
         if bars.empty:
             try:
                 bars = fetch_bars_for_entry(entry) or pd.DataFrame()
@@ -232,10 +329,17 @@ def _sidebar() -> tuple[str, Optional[str]]:
     _scan_label   = st.sidebar.selectbox("Auto-rescore interval", list(_scan_options.keys()), index=0)
     scan_interval = _scan_options[_scan_label]
 
+    st.sidebar.divider()
+    st.sidebar.subheader("🎛️ Display Filters")
+    min_score = st.sidebar.slider(
+        "Min score threshold", min_value=0.0, max_value=10.0, value=0.0, step=0.5,
+        help="Hide tickers scoring below this threshold (0 = show all)"
+    )
+
     if st.sidebar.button("🔄 Refresh data"):
         st.cache_data.clear()
 
-    return json_path, session_filter, post_filter, scan_interval
+    return json_path, session_filter, post_filter, scan_interval, min_score
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +416,19 @@ def _render_card(sc: SetupScore, idx: int, score_history: list = None) -> None:
             ("MACD Slope", sc.macd_score),
             ("RSI Div.",   sc.rsi_div_score),
             ("Regime",     sc.regime_score),
+            ("EQH",        sc.eqh_score),
         ]
         for label, val in score_rows:
             st.text(f"  {label:<12} {_bar(val)}  {val:.1f}/2")
+
+        # EQH (Equal Highs / Liquidity Ceiling) status
+        if sc.eqh_level and sc.eqh_level > 0:
+            eqh_icon = {
+                "eqh_breakout":  "🟢 Breakout fired",
+                "eqh_rejection": "🔴 Rejected",
+                "approaching":   "🟡 Approaching",
+            }.get(sc.eqh_signal, "🏛️ Detected")
+            st.info(f"**EQH Ceiling: ${sc.eqh_level:.3f}** — {eqh_icon}")
 
         # Role reversal + rejection badges
         badges = []
@@ -346,7 +460,7 @@ def main() -> None:
     st.set_page_config(page_title="Morning Brief", page_icon="📋", layout="wide")
     st.title("📋 Morning Brief — Watchlist Triage")
 
-    json_path, session_filter, post_filter, scan_interval = _sidebar()
+    json_path, session_filter, post_filter, scan_interval, min_score = _sidebar()
 
     if not Path(json_path).exists():
         st.error(f"Watchlist JSON not found: `{json_path}`")
@@ -379,7 +493,7 @@ def main() -> None:
 
     # ── Live scanner fragment — re-scores on interval, fires toast alerts ─────
     @st.fragment(run_every=scan_interval)
-    def _live_section(entries_json: str, live_refresh: bool) -> None:
+    def _live_section(entries_json: str, live_refresh: bool, _min_score: float = 0.0) -> None:
         import time as _time
 
         try:
@@ -481,20 +595,58 @@ def main() -> None:
             "R/R":     sc.rr_ratio,
             "ADX":     sc.adx,
             "Pattern": "✅" if sc.pattern_found else "—",
+            "EQH":     (f"🏛️${sc.eqh_level:.2f}" if sc.eqh_level else "—"),
         } for sc in scores]
 
         display_cols = ["Ticker", "Δ", "Score", "Signal", "Entry $", "Support",
-                        "Resist", "Stop", "R/R", "ADX", "Pattern"]
+                        "Resist", "Stop", "R/R", "ADX", "Pattern", "EQH"]
         df = pd.DataFrame(rows_data)[display_cols]
-        st.subheader(f"Ranked Setups — {len(df)} tickers")
-        st.dataframe(df, width='stretch', hide_index=True)
+
+        # ── Min-score filter ─────────────────────────────────────────────────
+        if _min_score > 0:
+            df_display = df[df["Score"] >= _min_score]
+            scores_display = [sc for sc in scores if sc.score >= _min_score]
+        else:
+            df_display = df
+            scores_display = scores
+
+        # ── Session badges ────────────────────────────────────────────────────
+        _sess_counts = {}
+        for sc in scores:
+            _sess_label = getattr(sc, "session_type", None)
+            if _sess_label:
+                _sess_counts[_sess_label] = _sess_counts.get(_sess_label, 0) + 1
+
+        _badge_parts = []
+        for _sess, _cnt in sorted(_sess_counts.items()):
+            _badge_parts.append(f"**{_cnt}** {_sess.replace('_', ' ')}")
+        if _badge_parts:
+            st.caption("Sessions: " + "  |  ".join(_badge_parts))
+
+        n_total    = len(df)
+        n_filtered = len(df_display)
+        header_str = f"Ranked Setups — {n_filtered} tickers" + (
+            f" (filtered from {n_total})" if n_filtered < n_total else ""
+        )
+        st.subheader(header_str)
+        st.dataframe(df_display, width='stretch', hide_index=True)
+
+        # ── CSV export ────────────────────────────────────────────────────────
+        _csv_bytes = df_display.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇️ Export to CSV",
+            data=_csv_bytes,
+            file_name="morning_brief_setups.csv",
+            mime="text/csv",
+            key=f"csv_export_{int(_ts_time.time())}",
+        )
 
         st.markdown("---")
         st.subheader("Setup Cards")
-        for idx, sc in enumerate(scores):
+        for idx, sc in enumerate(scores_display):
             _render_card(sc, idx, score_history=hist.get(sc.ticker, []))
 
-    _live_section(entries_json, _live_refresh)
+    _live_section(entries_json, _live_refresh, min_score)
 
 
 if __name__ == "__main__":

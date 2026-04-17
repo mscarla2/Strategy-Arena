@@ -70,8 +70,9 @@ class PatternMatch(BaseModel):
     candle3_open: float = 0.0   # C3 (completion candle) — 0.0 for backward compat
     candle3_close: float = 0.0  # C3
     in_downtrend: bool
-    confidence_score: float = 1.0   # 1.0 = strict S×S, 0.6 = exhaustion, 0.7 = absorption
-    pattern_type: str = "strict"    # "strict" | "exhaustion" | "absorption"
+    confidence_score: float = 1.0   # 1.0 = strict S×S, 0.6 = exhaustion, 0.7 = absorption, 0.8 = eqh_pair
+    pattern_type: str = "strict"    # "strict" | "exhaustion" | "absorption" | "eqh_pair" | "eqh_breakout" | "eqh_rejection"
+    eqh_level: float = 0.0          # EQH ceiling price (max of C2/C3 opens); 0.0 for non-EQH patterns
 
 
 class TradeResult(BaseModel):

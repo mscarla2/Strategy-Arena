@@ -546,3 +546,220 @@ def pattern_near_support(
         if support > 0 and abs(c3_body_low - support) / support <= proximity_pct:
             nearby.append(m)
     return nearby
+
+
+# ---------------------------------------------------------------------------
+# Equal Highs / S×S as Resistance — "Liquidity Ceiling" detector
+# ---------------------------------------------------------------------------
+
+def detect_equal_highs_pair(
+    df: pd.DataFrame,
+    open_tolerance_pct: float = 0.02,   # |C3.open - C2.open| / C2.open ≤ 2%
+    min_body_pct: float = 0.08,         # each candle body ≥ 8% of bar range (no dojis)
+    body_lookback: int = 10,            # rolling avg body window for C1 context candle
+) -> List[PatternMatch]:
+    """
+    Detect **Equal Highs / Liquidity Ceiling** pairs — the trader's primary
+    overhead-resistance target pattern.
+
+    Structure (based on trader images IMG_5448, IMG_5451, IMG_5452, IMG_5497):
+      C2: Any-direction candle opening at a key price level
+      C3: **Opposite-color** candle opening at nearly the same price as C2
+          (|C3.open - C2.open| / C2.open ≤ open_tolerance_pct)
+
+    The critical distinguishing feature is **mixed color**: one candle must be
+    bullish and one bearish. This is what the current bearish-only detectors
+    completely miss — the trader circles a yellow+black pair, not two black candles.
+
+    The EQH "ceiling" level is defined as max(C2.open, C3.open).
+
+    Trader rules:
+      • If next candle closes BELOW the pair low → hard decline (sell/exit)
+      • If next candle body closes ABOVE the ceiling → explosive breakout (entry)
+
+    Returns PatternMatch objects with:
+      pattern_type      = "eqh_pair"
+      confidence_score  = 0.8
+      eqh_level         = max(C2.open, C3.open)   — the ceiling price
+      candle2_open/close = C2 data
+      candle3_open/close = C3 data
+      in_downtrend      = False  (this pattern is direction-agnostic)
+    """
+    if df.empty or len(df) < max(3, body_lookback + 1):
+        return []
+
+    df = df.copy()
+    df["body_size"]  = (df["close"] - df["open"]).abs()
+    df["bar_range"]  = df["high"] - df["low"]
+    df["body_ratio"] = df["body_size"] / df["bar_range"].replace(0, np.nan)
+    df["avg_body"]   = df["body_size"].rolling(body_lookback, min_periods=3).mean()
+
+    ticker  = df.attrs.get("ticker", "")
+    matches: list[PatternMatch] = []
+
+    for i in range(1, len(df)):
+        c2_o = float(df["open"].iloc[i - 1])
+        c2_c = float(df["close"].iloc[i - 1])
+        c3_o = float(df["open"].iloc[i])
+        c3_c = float(df["close"].iloc[i])
+
+        if c2_o <= 0:
+            continue
+
+        # ── 1. Mixed-color check — one bull + one bear ────────────────────────
+        # This is the core distinguishing feature: the pair must be mixed-color.
+        # Two candles of the same direction = trend continuation, not a ceiling.
+        c2_bull = _is_bullish(c2_o, c2_c)
+        c3_bull = _is_bullish(c3_o, c3_c)
+        if c2_bull == c3_bull:
+            continue  # same color → skip (not a mixed EQH pair)
+
+        # ── 2. Body quality — no doji candles ─────────────────────────────────
+        r2 = df["body_ratio"].iloc[i - 1]
+        r3 = df["body_ratio"].iloc[i]
+        if pd.isna(r2) or pd.isna(r3):
+            continue
+        if r2 < min_body_pct or r3 < min_body_pct:
+            continue
+
+        # ── 3. Same-open check — the "equal" in Equal Highs ─────────────────
+        open_diff = abs(c3_o - c2_o) / c2_o
+        if open_diff > open_tolerance_pct:
+            continue
+
+        # ── 4. EQH ceiling = max of the two opens ────────────────────────────
+        eqh_ceiling = max(c2_o, c3_o)
+
+        # ── 5. Determine C1 context (optional, for PatternMatch fields) ───────
+        if i >= 2:
+            c1_o = float(df["open"].iloc[i - 2])
+            c1_c = float(df["close"].iloc[i - 2])
+        else:
+            c1_o = c2_o
+            c1_c = c2_c
+
+        matches.append(PatternMatch(
+            ticker=ticker,
+            ts=df.index[i],
+            bar_index=i,
+            candle1_open=c1_o,
+            candle1_close=c1_c,
+            candle2_open=c2_o,
+            candle2_close=c2_c,
+            candle3_open=c3_o,
+            candle3_close=c3_c,
+            in_downtrend=False,      # EQH is direction-agnostic
+            confidence_score=0.8,
+            pattern_type="eqh_pair",
+            eqh_level=round(eqh_ceiling, 6),
+        ))
+
+    return matches
+
+
+def detect_eqh_signal(
+    df: pd.DataFrame,
+    eqh_patterns: List[PatternMatch],
+    body_clear_pct: float = 0.003,   # body must clear the level by 0.3% (avoids wick fakes)
+    max_bars_after: int = 5,         # only look at the next 5 bars after the pair forms
+) -> List[PatternMatch]:
+    """
+    Scan bars immediately after each EQH pair for a **breakout** or **rejection**
+    confirmation signal.
+
+    Breakout (pattern_type = "eqh_breakout"):
+      A bar CLOSES its body fully ABOVE the EQH ceiling.
+      → Overhead supply swept; bulls in control; explosive move incoming.
+      → Trader entry: long at next open.
+
+    Rejection (pattern_type = "eqh_rejection"):
+      A bar CLOSES its body fully BELOW the pair's body low.
+      → Bulls failed to break the ceiling; bears defending; hard decline imminent.
+      → Trader exit: sell/short immediately.
+
+    Parameters
+    ----------
+    df              : Full OHLCV DataFrame (same bars used to detect eqh_patterns).
+    eqh_patterns    : List of PatternMatch objects with pattern_type="eqh_pair".
+    body_clear_pct  : The close must exceed the level by this fraction to qualify
+                      (prevents fake breakouts on a 1-tick close above).
+    max_bars_after  : Only scan this many bars after the C3 bar for a signal.
+
+    Returns a list of new PatternMatch objects for each fired signal.
+    """
+    if not eqh_patterns or df.empty:
+        return []
+
+    ticker = df.attrs.get("ticker", "")
+    signals: list[PatternMatch] = []
+
+    for pair in eqh_patterns:
+        if pair.pattern_type != "eqh_pair":
+            continue
+
+        eqh_ceiling = pair.eqh_level
+        if eqh_ceiling <= 0:
+            eqh_ceiling = max(pair.candle2_open, pair.candle3_open)
+
+        # Pair low = min of both candles' body lows
+        pair_low = min(
+            _body_low(pair.candle2_open, pair.candle2_close),
+            _body_low(pair.candle3_open, pair.candle3_close),
+        )
+
+        # Find pair's C3 bar index in df
+        pair_idx = pair.bar_index
+        if pair_idx < 0 or pair_idx >= len(df):
+            continue
+
+        # Scan the next max_bars_after bars for a signal
+        scan_end = min(pair_idx + 1 + max_bars_after, len(df))
+        for j in range(pair_idx + 1, scan_end):
+            bar_o = float(df["open"].iloc[j])
+            bar_c = float(df["close"].iloc[j])
+            bar_ts = df.index[j]
+
+            # Body clearance — use body high/low (not wicks)
+            body_hi = _body_high(bar_o, bar_c)
+            body_lo = _body_low(bar_o, bar_c)
+
+            breakout  = body_hi > eqh_ceiling * (1 + body_clear_pct) and bar_c > eqh_ceiling
+            rejection = body_lo < pair_low * (1 - body_clear_pct) and bar_c < pair_low
+
+            if breakout:
+                signals.append(PatternMatch(
+                    ticker=ticker,
+                    ts=bar_ts,
+                    bar_index=j,
+                    candle1_open=pair.candle2_open,
+                    candle1_close=pair.candle2_close,
+                    candle2_open=pair.candle3_open,
+                    candle2_close=pair.candle3_close,
+                    candle3_open=bar_o,
+                    candle3_close=bar_c,
+                    in_downtrend=False,
+                    confidence_score=0.9,
+                    pattern_type="eqh_breakout",
+                    eqh_level=eqh_ceiling,
+                ))
+                break  # only one signal per pair
+
+            if rejection:
+                signals.append(PatternMatch(
+                    ticker=ticker,
+                    ts=bar_ts,
+                    bar_index=j,
+                    candle1_open=pair.candle2_open,
+                    candle1_close=pair.candle2_close,
+                    candle2_open=pair.candle3_open,
+                    candle2_close=pair.candle3_close,
+                    candle3_open=bar_o,
+                    candle3_close=bar_c,
+                    in_downtrend=True,
+                    confidence_score=0.9,
+                    pattern_type="eqh_rejection",
+                    eqh_level=eqh_ceiling,
+                ))
+                break  # only one signal per pair
+
+    return signals

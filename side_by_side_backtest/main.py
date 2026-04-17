@@ -147,6 +147,20 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also optimise pattern_tolerance_pct during auto-tune",
     )
+    p.add_argument(
+        "--validate-oos",
+        action="store_true",
+        help=(
+            "After auto-tuning, run a walk-forward out-of-sample validation with the "
+            "best parameters on the chronologically last --oos-split fraction of entries."
+        ),
+    )
+    p.add_argument(
+        "--oos-split",
+        type=float,
+        default=0.30,
+        help="Fraction of entries reserved for OOS validation (default: 0.30 = 30%%)",
+    )
 
     # Quick single-pass parameters
     p.add_argument("--pt",  type=float, default=5.0, help="Profit target %% for the quick single-pass run")
@@ -196,6 +210,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.01,
         help="Side-by-Side body-midpoint tolerance (fraction, e.g. 0.01 = 1%%)",
+    )
+
+    # EQH Breakout mode
+    p.add_argument(
+        "--eqh",
+        action="store_true",
+        help=(
+            "Run in EQH Breakout mode instead of bearish S×S mode. "
+            "Detects mixed-color equal-open pairs (trader's primary overhead resistance target) "
+            "and enters long when a candle body closes above the EQH ceiling."
+        ),
     )
 
     # Report
@@ -289,13 +314,15 @@ def phase_fetch(args, entries, db) -> dict:
 def phase_single_run(args, entries, bars_map) -> list:
     from .simulator import simulate_all
 
-    max_loss  = getattr(args, "max_loss_pct", 5.0)
-    max_att   = getattr(args, "max_attempts", 0)
-    req_sup   = getattr(args, "require_support_ok", False)
+    max_loss    = getattr(args, "max_loss_pct", 5.0)
+    max_att     = getattr(args, "max_attempts", 0)
+    req_sup     = getattr(args, "require_support_ok", False)
+    eqh_mode    = getattr(args, "eqh", False)
 
+    mode_label = "EQH Breakout" if eqh_mode else "Bearish S×S"
     print(f"\n{'═'*60}")
     print(
-        f"  PHASE 3 — Single-Pass Simulation "
+        f"  PHASE 3 — Single-Pass Simulation [{mode_label}] "
         f"(PT={args.pt}%  SL={args.sl}%  MAX_LOSS={max_loss}%  "
         f"MAX_ATT={max_att or '∞'}  REQ_SUP={req_sup})"
     )
@@ -311,6 +338,7 @@ def phase_single_run(args, entries, bars_map) -> list:
         require_support_ok=req_sup,
         max_entry_attempts=max_att,
         verbose=args.verbose,
+        eqh_breakout_mode=eqh_mode,
     )
 
     wins    = sum(1 for t in trades if t.outcome == "win")
@@ -377,6 +405,8 @@ def phase_auto_tune(args, entries, bars_map) -> tuple:
         min_trades=args.tune_min_trades,
         objective=args.tune_objective,
         tune_tolerance=args.tune_tolerance,
+        validate_oos=getattr(args, "validate_oos", False),
+        oos_split=getattr(args, "oos_split", 0.30),
         verbose=True,
     )
 
@@ -488,6 +518,11 @@ def main(argv=None) -> None:
         # ── Phase 3: Single-pass ─────────────────────────────────────────
         single_trades = phase_single_run(args, entries, bars_map)
 
+        # Persist single-pass trades immediately so --no-sweep runs are stored
+        if single_trades:
+            db.upsert_trades(single_trades)
+            print(f"[main] {len(single_trades)} single-pass trades saved to DB.")
+
         if args.no_sweep:
             print("\n[main] --no-sweep: skipping optimisation. Done.")
             return
@@ -495,7 +530,7 @@ def main(argv=None) -> None:
         # ── Phase 4: Sweep or Auto-Tune ──────────────────────────────────
         if args.auto_tune:
             tune_result, best_trades = phase_auto_tune(args, entries, bars_map)
-            # Print concise best-params banner
+            # Print concise best-params banner (IS + optional OOS)
             print(
                 f"\n[main] Auto-tune complete — "
                 f"PT={tune_result.best_pt:.2f}%  "
@@ -505,6 +540,19 @@ def main(argv=None) -> None:
                 f"PF={tune_result.best_profit_factor:.3f}  "
                 f"trades={tune_result.best_total_trades}"
             )
+            if tune_result.oos_expectancy is not None:
+                oos_flag = (
+                    "✅ OOS holds up"
+                    if tune_result.oos_expectancy > 0
+                    else "⚠️  OOS degraded — possible overfit"
+                )
+                print(
+                    f"[main] Walk-forward OOS ({tune_result.oos_split_pct:.0%} of data) — "
+                    f"E={tune_result.oos_expectancy:+.4f}  "
+                    f"WR={tune_result.oos_win_rate:.1%}  "
+                    f"PF={tune_result.oos_profit_factor:.3f}  "
+                    f"trades={tune_result.oos_total_trades}  {oos_flag}"
+                )
             # Wrap in a minimal OptimizationResult-compatible object for phase_report
             from .optimizer import compute_summary
             from .models import OptimizationResult, BacktestSummary
@@ -518,10 +566,9 @@ def main(argv=None) -> None:
         else:
             opt_result, best_trades = phase_sweep(args, entries, bars_map)
 
-        # Persist best-config trades to DB
+        # Persist best-config trades to DB (overwrites single-pass trades)
         if best_trades:
-            db.clear_trades()
-            db.insert_trades(best_trades)
+            db.upsert_trades(best_trades)
             print(f"[main] {len(best_trades)} trades from best config saved to DB.")
 
         # ── Phase 5: Report ──────────────────────────────────────────────
