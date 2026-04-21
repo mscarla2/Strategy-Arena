@@ -6,9 +6,6 @@ __pycache__/
 # Parquet files
 *.parquet
 
-# JSON files (remove this line if you want to keep some)
-*.json
-
 # SQLite strategies db (keep your other .db files)
 # Adjust as needed
 
