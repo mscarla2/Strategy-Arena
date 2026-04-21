@@ -269,6 +269,17 @@ Measures disk-only first-render path, background refresh wall-clock, and blockin
 
 ---
 
+## 🃏 Card Mode Simulation
+Backtests the strategy using the Card's own support/resistance levels instead of fixed percentages.
+- **Rescore Stride:** Scans every bar (`stride=1`) for granular entry detection.
+- **Regime Detection:** Identifies "choppy" vs "trending" days based on VWAP crossings in the first 60 minutes (4+ crosses = choppy).
+- **Dynamic Adjustments:**
+    - Exits at TP only if day is classified as "choppy".
+    - Tightens stop to max 2% on choppy days.
+    - Uses Linda Raschke 3/10 Oscillator (SMA based) to detect weakening momentum and tighten stops/TP during the trade.
+
+---
+
 ## 📈 Chart Viewer — Y-Axis Auto-Fit & EQH Overlays
 
 The Chart Viewer now behaves like TradingView:
