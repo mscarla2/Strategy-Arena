@@ -894,11 +894,33 @@ def _fetch_spy_benchmark(start_date: str, end_date: str) -> Optional[float]:
     """
     Fetch SPY daily bars and return the buy-and-hold return % from start to end.
     Returns None if data is unavailable.
+
+    Guarantees at least a 5-calendar-day window so weekend-only ranges don't
+    produce empty results.  yfinance noise is suppressed via _silence_yfinance().
     """
+    from datetime import datetime as _dt, timedelta as _td
+    from side_by_side_backtest.data_fetcher import _silence_yfinance
+
     try:
         import yfinance as yf
-        spy = yf.download("SPY", start=start_date, end=end_date,
-                          interval="1d", progress=False, auto_adjust=True)
+
+        # Ensure the window spans at least 5 calendar days (covers Mon–Fri).
+        start_dt = _dt.fromisoformat(start_date)
+        end_dt   = _dt.fromisoformat(end_date)
+        if (end_dt - start_dt).days < 5:
+            end_dt = start_dt + _td(days=5)
+
+        with _silence_yfinance():
+            spy = yf.download(
+                "SPY",
+                start=start_dt.strftime("%Y-%m-%d"),
+                end=end_dt.strftime("%Y-%m-%d"),
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+                threads=False,
+            )
+
         if spy.empty or len(spy) < 2:
             return None
         close = spy["Close"] if "Close" in spy.columns else spy.iloc[:, 0]

@@ -2,7 +2,7 @@
 """
 run_today.py — "How would I have done today with the card strategy?"
 
-Loads today's MARKET OPEN watchlist post, fetches 30-day 5-min bars for every
+Loads today's watchlist posts (all sessions), fetches 30-day 5-min bars for every
 ticker, then runs simulate_card_strategy() across the full bar history — scoring
 every 5-min session open, entering when score >= threshold, and exiting via the
 card's own TP/SL levels.  Budget mirrors autonomous config ($5k / $500 / max 10).
@@ -170,21 +170,18 @@ def _print_trades(trades: list, trade_size: float, budget: float) -> None:
 
 
 def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
-    """Run simulation for every unique MARKET OPEN post date in the JSON.
+    """Run simulation for every unique post date in the JSON.
 
     Optimised: collects ALL unique tickers across ALL posts, loads bars once,
     runs simulate_card_strategy ONCE (it already scores all 30 days internally),
     then groups the returned trades by calendar date for the per-day summary.
     """
-    # ── Collect all unique tickers across all MARKET OPEN posts ──────────────
+    # ── Collect all unique tickers across all posts ───────────────────────────
     all_entries: list = []
     all_dates: list[date] = []
     seen_dates: set[date] = set()
 
     for p in posts:
-        title = p.get("title", "").upper()
-        if "MARKET OPEN" not in title:
-            continue
         ts_raw = p.get("timestamp", "")
         try:
             ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
@@ -199,18 +196,19 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
 
     all_dates.sort()
     if not all_dates:
-        print(f"{_Y}No MARKET OPEN posts found in {_WL_PATH}.{_RST}")
+        print(f"{_Y}No posts found in {_WL_PATH}.{_RST}")
         return
 
     # Dedupe entries by ticker
     seen_t: set[str] = set()
     unique: list = []
     for e in all_entries:
-        if e.ticker not in seen_t and not is_banned(e.ticker):
-            seen_t.add(e.ticker); unique.append(e)
+        if e.ticker != "SPY" and e.ticker not in seen_t and not is_banned(e.ticker):
+            seen_t.add(e.ticker)
+            unique.append(e)
 
     mode_label = "CARD" if args.mode == "card" else "SBS"
-    print(f"\n{_BOLD}[{mode_label}] Running all {len(all_dates)} MARKET OPEN sessions — "
+    print(f"\n{_BOLD}[{mode_label}] Running all {len(all_dates)} sessions — "
           f"{len(unique)} unique tickers  ${args.size}/trade{_RST}")
     print(f"{_DIM}Loading bars …{_RST}")
 
@@ -227,7 +225,7 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
                     bars_map[e.ticker] = b
             except Exception:
                 pass
-
+    
     print(f"{_DIM}{len(bars_map)}/{len(unique)} tickers have bars — simulating …{_RST}\n")
 
     # ── Simulate ──────────────────────────────────────────────────────────────
@@ -252,7 +250,7 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
         from side_by_side_backtest.simulator import simulate_all as _sim_all
         all_trades = []
         for sim_date in all_dates:
-            day_matched = _pick_posts(posts, args.session, sim_date)
+            day_matched = _pick_posts(posts, "unknown", sim_date)
             if not day_matched:
                 continue
             day_entries: list = []
@@ -261,7 +259,7 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
             day_seen: set[str] = set()
             day_unique: list = []
             for e in day_entries:
-                if e.ticker not in day_seen and not is_banned(e.ticker):
+                if e.ticker != "SPY" and e.ticker not in day_seen and not is_banned(e.ticker):
                     day_seen.add(e.ticker); day_unique.append(e)
             day_bars = {e.ticker: bars_map[e.ticker]
                         for e in day_unique if e.ticker in bars_map}
@@ -271,6 +269,8 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
                 day_unique, day_bars,
                 profit_target_pct=args.tp,
                 stop_loss_pct=args.sl,
+                max_entry_attempts=10,
+                require_support_ok=True,
                 verbose=False,
             )
             all_trades.extend(day_trades)
@@ -356,7 +356,7 @@ def main() -> None:
     ap.add_argument("--halt",     type=float, default=300.0,
                     help="Daily loss halt $ (default 300)")
     ap.add_argument("--all",      action="store_true",
-                    help="Run simulation for every MARKET OPEN post in the JSON")
+                    help="Run simulation for every post date in the JSON")
     args = ap.parse_args()
 
     target_date: date | None = None
@@ -371,13 +371,13 @@ def main() -> None:
     max_conc = max(1, int(args.budget // args.size))
     posts    = _load_posts()
 
-    # ── --all mode: iterate every MARKET OPEN post date ──────────────────────
+    # ── --all mode: iterate every post date ──────────────────────────────────
     if args.all:
         _run_all(args, posts, do_fetch, max_conc)
         return
 
     # ── 1. Find today's post ──────────────────────────────────────────────────
-    matched = _pick_posts(posts, args.session, target_date)
+    matched = _pick_posts(posts, "unknown" if args.mode == "sbs" else args.session, target_date)
 
     if not matched:
         date_str = str(target_date or datetime.now(tz=_ET).date())
@@ -403,8 +403,8 @@ def main() -> None:
     seen: set[str] = set()
     unique: list = []
     for e in entries:
-        if e.ticker not in seen and not is_banned(e.ticker):
-            seen.add(e.ticker); unique.append(e)
+        if e.ticker != "SPY" and e.ticker not in seen and not is_banned(e.ticker):
+                    seen.add(e.ticker); unique.append(e)
 
     print(f"\n{_BOLD}{len(unique)} tickers{_RST} "
           f"({'live fetch' if do_fetch else 'cached only'}) — loading bars …\n")
@@ -489,6 +489,8 @@ def main() -> None:
             unique, bars_map,
             profit_target_pct=args.tp,
             stop_loss_pct=args.sl,
+            max_entry_attempts=10,
+            require_support_ok=True,
             verbose=False,
         )
         trades = [t for t in all_trades if _trade_date(t) == sim_date]

@@ -229,10 +229,13 @@ def _fetch_benchmark_series(start_date: str, end_date: str) -> Optional[pd.Serie
     """
     try:
         import yfinance as yf  # type: ignore
-        raw = yf.download(
-            _BENCHMARK_TICKER, start=start_date, end=end_date,
-            interval="1d", progress=False, auto_adjust=True,
-        )
+        from side_by_side_backtest.data_fetcher import _silence_yfinance
+        with _silence_yfinance():
+            raw = yf.download(
+                _BENCHMARK_TICKER, start=start_date, end=end_date,
+                interval="1d", progress=False, auto_adjust=True,
+                threads=False,
+            )
         if raw.empty:
             return None
 

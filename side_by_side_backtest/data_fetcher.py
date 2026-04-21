@@ -32,6 +32,28 @@ def _yf():
         raise ImportError("yfinance is required: pip install yfinance") from exc
 
 
+import contextlib as _contextlib
+import io as _io
+import logging as _logging
+
+
+@_contextlib.contextmanager
+def _silence_yfinance():
+    """Context manager that suppresses yfinance's 'possibly delisted' and other
+    noisy log/stderr output.  yfinance emits these through both its own logger
+    (``yfinance``) and directly to sys.stderr depending on the version."""
+    import sys
+    yf_logger = _logging.getLogger("yfinance")
+    old_level  = yf_logger.level
+    yf_logger.setLevel(_logging.CRITICAL)   # swallow WARNING / ERROR noise
+    old_stderr = sys.stderr
+    sys.stderr  = _io.StringIO()            # capture any direct stderr writes
+    try:
+        yield
+    finally:
+        yf_logger.setLevel(old_level)
+        sys.stderr = old_stderr
+
 
 
 def _alpaca_client():
@@ -114,7 +136,10 @@ def ban_ticker(ticker: str, reason: str = "") -> None:
 
 
 def is_banned(ticker: str) -> bool:
-    return ticker.upper().strip() in _BANNED_TICKERS
+    t = ticker.upper().strip()
+    if t == "SPY":
+        return True
+    return t in _BANNED_TICKERS
 
 
 # Load ban list at import time
@@ -197,11 +222,12 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.DataFrame:
     # MultiIndex dividend-adjustment reindex bug in yfinance 1.1.x + pandas 2.3.
     df = pd.DataFrame()
     try:
-        t = yf.Ticker(ticker)
-        df = t.history(
-            start=start, end=end, interval="5m",
-            auto_adjust=True, prepost=True,
-        )
+        with _silence_yfinance():
+            t = yf.Ticker(ticker)
+            df = t.history(
+                start=start, end=end, interval="5m",
+                auto_adjust=True, prepost=True,
+            )
     except Exception:
         df = pd.DataFrame()
 
@@ -211,16 +237,17 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.DataFrame:
     # duplicate timestamps.  Only use this if .history() returned nothing.
     if df.empty:
         try:
-            df = yf.download(
-                ticker,
-                start=start,
-                end=end,
-                interval="5m",
-                auto_adjust=True,
-                prepost=True,
-                progress=False,
-                threads=False,
-            )
+            with _silence_yfinance():
+                df = yf.download(
+                    ticker,
+                    start=start,
+                    end=end,
+                    interval="5m",
+                    auto_adjust=True,
+                    prepost=True,
+                    progress=False,
+                    threads=False,
+                )
             # Robustly handle yfinance MultiIndex: new versions return ('Close', 'TICKER')
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
