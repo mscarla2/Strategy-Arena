@@ -33,9 +33,10 @@ import pandas as pd
 
 _PKG = Path(__file__).parent
 _DEFAULT_JSON  = _PKG.parent / "scraped_watchlists.json"
-_POLL_INTERVAL = 300          # seconds between full scans
+_POLL_INTERVAL = 60           # seconds between full scans (entry attempts + position checks)
 _TOUCH_BAND    = 0.005        # body within 0.5% of support = "touched" (body-based, not wick)
 _PATTERN_BARS  = 30           # last N bars to check for the pattern
+_HEARTBEAT_FILE = _PKG / ".scanner_heartbeat.json"   # written after every scan pass
 
 # ---------------------------------------------------------------------------
 # ANSI helpers
@@ -47,6 +48,11 @@ _YELLOW = "\033[93m"
 _CYAN   = "\033[96m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
+
+
+# Global flag — set to False by the Streamlit page when running in-process
+# to suppress macOS notifications/sounds that conflict with the browser session.
+_NOTIFICATIONS_ENABLED: bool = True
 
 
 def _banner(sc) -> None:
@@ -65,7 +71,9 @@ def _banner(sc) -> None:
 
 
 def _desktop_notify(sc) -> None:
-    """Fire a macOS notification via osascript (no-op on non-macOS)."""
+    """Fire a macOS notification via osascript. No-op if notifications disabled."""
+    if not _NOTIFICATIONS_ENABLED:
+        return
     if sys.platform != "darwin":
         return
     msg  = f"Score {sc.score}/10 | R/R {sc.rr_ratio:.1f}:1 | Support ${sc.support:.2f}"
@@ -81,7 +89,9 @@ def _desktop_notify(sc) -> None:
 
 
 def _sound() -> None:
-    """Play effect.mp3 via afplay (macOS), fallback to system bell."""
+    """Play effect.mp3 via afplay (macOS), fallback to system bell. No-op if disabled."""
+    if not _NOTIFICATIONS_ENABLED:
+        return
     _mp3 = Path(__file__).parent / "effect.mp3"
     if sys.platform == "darwin" and _mp3.exists():
         try:
@@ -96,10 +106,17 @@ def _sound() -> None:
 # Watchlist loading
 # ---------------------------------------------------------------------------
 
-def _load_entries(json_path: str) -> list:
-    """Parse today's watchlist entries from the JSON file."""
+def _load_entries(json_path: str, today_only: bool = True) -> list:
+    """
+    Parse watchlist entries from the JSON file.
+
+    today_only=True (default): only parse posts from today's date, so the
+    scanner focuses on the current watchlist rather than all historical posts.
+    Set to False to scan the full history (original behaviour).
+    """
     from .models import RawWatchlist
     from .parser import parse_watchlist_post
+    from datetime import date
 
     try:
         raw = json.loads(Path(json_path).read_text())
@@ -107,12 +124,35 @@ def _load_entries(json_path: str) -> list:
         print(f"[scanner] Cannot load {json_path}: {exc}")
         return []
 
+    if today_only:
+        today_str = date.today().isoformat()  # "2026-04-20"
+        raw = [p for p in raw if (p.get("timestamp") or "").startswith(today_str)]
+        if not raw:
+            # Fallback: use the most recent day's posts if today has none
+            if raw_all := json.loads(Path(json_path).read_text()):
+                latest_date = max(
+                    (p.get("timestamp") or "")[:10]
+                    for p in raw_all
+                    if p.get("timestamp")
+                )
+                raw = [p for p in raw_all if (p.get("timestamp") or "").startswith(latest_date)]
+                print(f"[scanner] No posts for today — using latest date: {latest_date} ({len(raw)} posts)")
+
     entries = []
     for post in raw:
         try:
             entries.extend(parse_watchlist_post(RawWatchlist(**post)))
         except Exception:
             pass
+
+    if today_only:
+        # Deduplicate by ticker — keep entry with highest support (most recent)
+        seen: dict = {}
+        for e in reversed(entries):
+            seen.setdefault(e.ticker, e)
+        entries = list(seen.values())
+        print(f"[scanner] Today's entries: {len(entries)} tickers from {len(raw)} post(s)")
+
     return entries
 
 
@@ -122,41 +162,169 @@ def _load_entries(json_path: str) -> list:
 
 def _check_ticker(entry) -> Optional[object]:
     """
-    Fetch fresh 5-min bars, check support touch + pattern.
-    Returns a SetupScore if an entry signal fires, else None.
+    Score the ticker using fresh 30-day bars.
+    Returns a SetupScore always (for card strategy score-based entry),
+    or None if bars unavailable.
+
+    Uses load_30day_bars for live fresh data — fetch_bars_for_entry uses
+    the post timestamp which can be stale.
     """
-    from .data_fetcher import fetch_bars_for_entry
-    from .pattern_engine import detect_side_by_side
+    from .data_fetcher import load_30day_bars
     from .setup_scorer import score_setup
 
-    support = entry.support_level
-    if not support or support <= 0:
-        return None
-
     try:
-        bars: pd.DataFrame = fetch_bars_for_entry(entry) or pd.DataFrame()
+        bars: pd.DataFrame = load_30day_bars(entry.ticker)
     except Exception:
         return None
 
     if bars.empty or len(bars) < 3:
         return None
 
-    # Touch check: last bar's BODY low ≤ support × (1 + band)
-    # Trader rule: "it's the bodies not the wicks"
-    last_open  = float(bars["open"].iloc[-1])
-    last_close = float(bars["close"].iloc[-1])
-    body_low   = min(last_open, last_close)
-    if body_low > support * (1 + _TOUCH_BAND):
-        return None   # candle body hasn't reached support yet
-
-    # Pattern check on last N bars
-    recent = bars.iloc[-_PATTERN_BARS:]
-    patterns = detect_side_by_side(recent)
-    if not patterns:
+    # Score the setup — score_setup handles S/R fallback internally
+    try:
+        sc = score_setup(entry, bars)
+        # Attach the actual current market price so _execute_for_strategy
+        # uses the real bid/ask level, not the watchlist support level.
+        if sc is not None:
+            sc._current_market_price = float(bars["close"].iloc[-1])
+        return sc
+    except Exception:
         return None
 
-    # Signal confirmed — score the full setup
-    return score_setup(entry, bars)
+
+# ---------------------------------------------------------------------------
+# Autonomous execution hook
+# ---------------------------------------------------------------------------
+
+_COOLDOWN_MINUTES = 30   # don't re-enter same ticker+strategy within 30 min
+
+
+def _is_on_cooldown(ticker: str, strategy_name: str, db_path) -> bool:
+    """
+    Return True if this ticker+strategy has an open position OR was entered
+    within the last COOLDOWN_MINUTES. Checks the DB so it persists across
+    scanner restarts.
+    """
+    try:
+        from .db import WatchlistDB
+        with WatchlistDB(db_path) as db:
+            rows = db.load_actual_trades(strategy_name=strategy_name)
+        # Filter to this ticker
+        ticker_rows = [r for r in rows if r["ticker"] == ticker]
+        if not ticker_rows:
+            return False
+        # Open position → always on cooldown
+        if any(r["outcome"] == "open" for r in ticker_rows):
+            return True
+        # Recently closed → cooldown
+        import pandas as pd
+        last_entry = max(
+            pd.Timestamp(r["entry_ts"]) for r in ticker_rows
+        )
+        if last_entry.tzinfo is None:
+            last_entry = last_entry.tz_localize("UTC")
+        elapsed = (datetime.now(tz=timezone.utc) - last_entry).total_seconds() / 60
+        return elapsed < _COOLDOWN_MINUTES
+    except Exception:
+        return False
+
+
+def _execute_for_strategy(sc, monitor, engine, strategy_cfg, master_cfg) -> None:
+    """
+    Evaluate and execute one signal for a single strategy configuration.
+
+    Card Strategy  : entry signal = score ≥ min_score ONLY (no pattern required).
+                     The score already incorporates pattern, ADX, confluence etc.
+    Backtest Strat : entry signal = pattern + support touch (score irrelevant).
+                     Uses sc (already scored) but ignores score gate.
+    Both strategies: cooldown — skip re-entry within 30 min of last entry.
+    """
+    sname    = strategy_cfg.name
+    mode_tag = "[PAPER]" if master_cfg.paper_mode else "[LIVE]"
+
+    # ── Cooldown check (both strategies) — DB-backed, persists across restarts
+    if _is_on_cooldown(sc.ticker, sname, master_cfg.db_path):
+        return  # silent — don't spam console every 5 min
+
+    # ── Strategy-specific entry gate ──────────────────────────────────────────
+    if sname == "card_strategy":
+        # Card: score ≥ threshold is sufficient — no pattern check needed
+        if sc.score < strategy_cfg.min_score:
+            return
+    else:
+        # Backtest: requires support touch + pattern (already validated in _check_ticker
+        # via score_setup which scores the pattern component)
+        # Pattern score > 0 means at least some pattern detected
+        if sc.pattern_score <= 0:
+            return
+
+    # Use actual current market price, not the watchlist support level
+    current_mkt_price = getattr(sc, "_current_market_price", None) or sc.entry_price
+    decision = engine.evaluate(sc, current_price=current_mkt_price)
+    if not decision.go:
+        print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — skip: {decision.reason}{_RESET}")
+        return
+
+    print(
+        f"{_GREEN}{_BOLD}{mode_tag}[{sname}] ENTERING {sc.ticker}  "
+        f"qty={decision.quantity} @ limit ${decision.limit_price:.3f}  "
+        f"score={sc.score:.1f}  {decision.reason}{_RESET}"
+    )
+
+    # PT/SL: use Bayesian-tuned median from simulated trades if available
+    pt_pct = strategy_cfg.default_pt_pct
+    sl_pct = strategy_cfg.default_sl_pct
+    try:
+        from .db import WatchlistDB
+        with WatchlistDB(master_cfg.db_path) as db:
+            all_trades = db.load_trades()
+        ticker_trades = [t for t in all_trades if t.ticker == sc.ticker]
+        if len(ticker_trades) >= 3:
+            import statistics
+            pt_pct = statistics.median(t.profit_target_pct for t in ticker_trades)
+            sl_pct = statistics.median(t.stop_loss_pct for t in ticker_trades)
+    except Exception:
+        pass
+
+    entry_ts = datetime.now(tz=timezone.utc)
+    if not master_cfg.paper_mode:
+        from .schwab_broker import SchwabBroker
+        broker = SchwabBroker(master_cfg)
+        order  = broker.place_order(
+            ticker=sc.ticker,
+            side="buy",
+            quantity=decision.quantity,
+            limit_price=decision.limit_price,
+        )
+
+    # Use the actual current market price (limit_price = current_price × 1.005),
+    # NOT sc.entry_price which is the watchlist support level — not the fill price.
+    actual_entry_price = decision.limit_price or sc.entry_price
+    monitor.open_paper_position(
+        ticker=sc.ticker,
+        entry_ts=entry_ts,
+        entry_price=actual_entry_price,
+        quantity=decision.quantity,
+        setup_score=sc.score,
+        pt_pct=pt_pct,
+        sl_pct=sl_pct,
+        session_type=getattr(sc, "session_type", "unknown"),
+        strategy_name=sname,
+    )
+
+    # Cooldown is now DB-backed via _is_on_cooldown() — no in-process dict needed
+
+
+def _autonomous_execute_all(sc, monitor, engines: list) -> None:
+    """
+    Run the signal through ALL strategies. Each strategy evaluates independently.
+    engines: list of (DecisionEngine, StrategyConfig, MasterConfig) tuples
+    """
+    for engine, strategy_cfg, master_cfg in engines:
+        try:
+            _execute_for_strategy(sc, monitor, engine, strategy_cfg, master_cfg)
+        except Exception as exc:
+            print(f"[autonomous] Error in {strategy_cfg.name} for {sc.ticker}: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +336,8 @@ def _check_ticker(entry) -> Optional[object]:
 _SCAN_WORKERS = 8
 
 
-def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS) -> int:
+def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS,
+              autonomous: bool = False) -> int:
     """
     Run one full scan pass in parallel. Returns number of alerts fired.
 
@@ -176,13 +345,30 @@ def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS) -> int:
     ----------
     max_workers : int
         Concurrent ticker-check threads (default 8).
+    autonomous  : bool
+        If True, pass signals through the Decision Engine and open positions.
     """
     entries = _load_entries(json_path)
     if not entries:
         print("[scanner] No entries to scan.")
         return 0
 
-    alerts = []
+    # Lazy-init autonomous components (shared across alerts this pass)
+    monitor  = None
+    engines  = []   # list of (DecisionEngine, StrategyConfig, MasterConfig) tuples
+    if autonomous:
+        from .autonomous_config import CONFIG
+        from .decision_engine import DecisionEngine
+        from .position_monitor import PositionMonitor
+        monitor = PositionMonitor(config=CONFIG)
+        for strategy_cfg in CONFIG.strategies:
+            engines.append((
+                DecisionEngine(strategy=strategy_cfg, master_config=CONFIG),
+                strategy_cfg,
+                CONFIG,
+            ))
+
+    all_scores  = []   # every scored SetupScore (for autonomous execution)
 
     with ThreadPoolExecutor(max_workers=min(max_workers, len(entries))) as pool:
         futures = {pool.submit(_check_ticker, entry): entry for entry in entries}
@@ -192,25 +378,73 @@ def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS) -> int:
             except Exception:
                 sc = None
             if sc is not None:
-                alerts.append(sc)
+                all_scores.append(sc)
 
-    # Fire alerts sequentially so sounds/notifications don't overlap
-    for sc in alerts:
+    # Banners/sounds only for pattern-confirmed setups (backtest-style alert)
+    # Card strategy needs no pattern — it just needs score ≥ 4.3
+    pattern_alerts = [sc for sc in all_scores if sc.pattern_score > 0 and sc.support > 0
+                      and min(sc.entry_price or 0, sc.support) > 0
+                      and abs((sc.entry_price or 0) - sc.support) / sc.support <= _TOUCH_BAND]
+
+    for sc in pattern_alerts:
         _banner(sc)
         _desktop_notify(sc)
         _sound()
 
-    ts = datetime.now(tz=timezone.utc).strftime("%H:%M:%S UTC")
-    print(f"[scanner] {ts} — scanned {len(entries)} tickers, {len(alerts)} alert(s).")
-    return len(alerts)
+    # Autonomous execution runs on ALL scored setups — each strategy applies its own gate
+    if autonomous and monitor is not None and engines:
+        for sc in all_scores:
+            _autonomous_execute_all(sc, monitor, engines)
+
+    # In autonomous mode: also check open positions for exits each cycle
+    if autonomous and monitor is not None:
+        from .data_fetcher import load_30day_bars
+        open_tickers = set(
+            t["ticker"]
+            for t in monitor._db_conn().load_actual_trades(open_only=True)
+        )
+        bmap = {t: load_30day_bars(t) for t in open_tickers}
+        closed = monitor.check_all_positions(bmap)
+        for c in closed:
+            print(
+                f"{_CYAN}[auto] EXIT {c['ticker']}  "
+                f"reason={c['reason']}  PnL=${c['pnl_dollar']:+.2f} ({c['pnl_pct']:+.2f}%){_RESET}"
+            )
+
+    ts_now = datetime.now(tz=timezone.utc)
+    ts = ts_now.strftime("%H:%M:%S UTC")
+    print(f"[scanner] {ts} — scanned {len(entries)} tickers, {len(pattern_alerts)} alert(s).")
+
+    # ── Write heartbeat so the Streamlit page can show "Last scan / Next in" ──
+    try:
+        _HEARTBEAT_FILE.write_text(
+            json.dumps({
+                "last_scan_ts": ts_now.isoformat(),
+                "poll_interval": _POLL_INTERVAL,
+                "tickers_scanned": len(entries),
+                "alerts": len(pattern_alerts),
+            })
+        )
+    except Exception:
+        pass  # never crash the scanner over a UI hint file
+
+    return len(pattern_alerts)
 
 
-def run_loop(json_path: str, interval: int) -> None:
-    """Poll indefinitely, sleeping *interval* seconds between scans."""
-    print(f"[scanner] Starting live scan — interval {interval}s — Ctrl+C to stop")
+def run_loop(json_path: str, interval: int, autonomous: bool = False) -> None:
+    """
+    Poll indefinitely, sleeping *interval* seconds between scans.
+
+    With _POLL_INTERVAL=60 every scan pass does BOTH:
+      • Entry attempt scoring (card + backtest strategy gates)
+      • Open-position exit checks (PT/SL/time-stop/momentum-fade)
+      • Heartbeat file write (for the Streamlit status banner)
+    """
+    mode = "AUTONOMOUS" if autonomous else "alert-only"
+    print(f"[scanner] Starting live scan ({mode}) — interval {interval}s — Ctrl+C to stop")
     try:
         while True:
-            scan_once(json_path)
+            scan_once(json_path, autonomous=autonomous)
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\n[scanner] Stopped.")
@@ -237,12 +471,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "--once", action="store_true",
         help="Run a single scan pass and exit (no loop)",
     )
+    p.add_argument(
+        "--autonomous", action="store_true",
+        help=(
+            "Enable autonomous execution mode: signals pass through the Decision "
+            "Engine and positions are opened/monitored automatically. "
+            "Runs in paper mode by default (autonomous_config.py paper_mode=True). "
+            "Flip paper_mode=False after Schwab API credentials are configured."
+        ),
+    )
+    p.add_argument(
+        "--no-notifications", action="store_true", dest="no_notifications",
+        help="Suppress macOS desktop notifications and sounds (use when running from Streamlit).",
+    )
     return p
 
 
 if __name__ == "__main__":
     args = _build_parser().parse_args()
+    # Apply notification suppression flag before any scanning.
+    # Set the module-level global directly (this IS the running module when
+    # invoked via `python -m side_by_side_backtest.live_scanner`).
+    if getattr(args, "no_notifications", False):
+        _NOTIFICATIONS_ENABLED = False  # module-level global in THIS module
+        # Also patch via sys.modules in case the package was already imported
+        import sys as _sys
+        _mod = _sys.modules.get("side_by_side_backtest.live_scanner")
+        if _mod is not None:
+            _mod._NOTIFICATIONS_ENABLED = False
     if args.once:
-        scan_once(args.watchlist)
+        scan_once(args.watchlist, autonomous=getattr(args, "autonomous", False))
     else:
-        run_loop(args.watchlist, args.interval)
+        run_loop(args.watchlist, args.interval, autonomous=getattr(args, "autonomous", False))

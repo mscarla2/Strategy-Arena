@@ -426,6 +426,167 @@ def main() -> None:
         st.dataframe(ea_stats, width='stretch', hide_index=True)
         st.caption("**1st touch** = first support contact of the session — typically the highest-quality setup.")
 
+    # ── Card Strategy backtest comparison ─────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📋 Card Strategy Backtest")
+    st.caption(
+        "Replays every trading session in the 30-day bar history. "
+        "Score ≥ threshold → enter at session open. "
+        "**TP/SL come from each card's own levels** (resistance = TP, stop = SL). "
+        "Budget rules mirror autonomous config: $500/trade · max 10 concurrent · $300/day halt."
+    )
+    c_score, c_budget, c_size, c_halt = st.columns(4)
+    card_min_score  = c_score.number_input("Min score", min_value=0.0, max_value=10.0,
+                                           value=4.3, step=0.1, key="card_min_score")
+    card_budget     = c_budget.number_input("Budget $", min_value=100.0, max_value=100_000.0,
+                                            value=5_000.0, step=500.0, key="card_budget")
+    card_trade_size = c_size.number_input("Trade size $", min_value=50.0, max_value=10_000.0,
+                                          value=500.0, step=50.0, key="card_trade_size")
+    card_halt       = c_halt.number_input("Daily loss halt $", min_value=0.0, max_value=5_000.0,
+                                          value=300.0, step=50.0, key="card_halt")
+
+    if st.button("▶ Run Card Strategy Backtest", key="run_card_bt"):
+        with st.spinner(f"Scoring every session (score ≥ {card_min_score})… this may take 2–5 min"):
+            try:
+                from side_by_side_backtest.card_strategy_simulator import simulate_card_strategy
+                from side_by_side_backtest.data_fetcher import (
+                    load_30day_bars,
+                    fetch_bars_for_entry,
+                    is_banned,
+                )
+                from side_by_side_backtest.parser import parse_scraped_file
+                from side_by_side_backtest.db import WatchlistDB
+
+                wl_path = Path(__file__).parent.parent.parent / "scraped_watchlists.json"
+                entries = parse_scraped_file(wl_path)
+
+                # Load bars from 30d cache; fall back to live fetch if parquet
+                # doesn't exist yet (mirrors Morning Brief behaviour).
+                tickers = list({e.ticker for e in entries})
+                entry_by_ticker = {e.ticker: e for e in entries}
+                bars_map = {}
+                missing_cache: list[str] = []
+                for t in tickers:
+                    b = load_30day_bars(t)
+                    if not b.empty:
+                        bars_map[t] = b
+                    else:
+                        missing_cache.append(t)
+
+                # Fallback: fetch bars live for tickers without a cached parquet.
+                # Exclude banned tickers upfront so they never appear in the banner.
+                missing_cache = [t for t in missing_cache if not is_banned(t)]
+                if missing_cache:
+                    st.info(
+                        f"⚡ Fetching bars for {len(missing_cache)} ticker(s) "
+                        f"not yet in cache: {', '.join(missing_cache[:10])}"
+                        + (" …" if len(missing_cache) > 10 else "")
+                    )
+                    for t in missing_cache:
+                        try:
+                            entry_ref = entry_by_ticker.get(t)
+                            if entry_ref is not None:
+                                b = fetch_bars_for_entry(entry_ref)
+                                if b is not None and not b.empty:
+                                    bars_map[t] = b
+                        except Exception as _fe:
+                            st.warning(f"Could not fetch bars for {t}: {_fe}")
+
+                max_conc = max(1, int(card_budget // card_trade_size))
+
+                with WatchlistDB() as _db:
+                    card_trades = simulate_card_strategy(
+                        entries, bars_map,
+                        min_score=card_min_score,
+                        db=_db,
+                        verbose=True,
+                        budget_total=card_budget,
+                        trade_size=card_trade_size,
+                        max_concurrent=max_conc,
+                        daily_loss_halt=card_halt,
+                    )
+
+                if card_trades:
+                    ct = pd.DataFrame([{
+                        "ticker":      t.ticker,
+                        "entry_ts":    t.entry_ts,
+                        "entry_price": t.entry_price,
+                        "exit_price":  t.exit_price or t.entry_price,
+                        "pnl_pct":     t.pnl_pct,
+                        "outcome":     t.outcome,
+                        "hold_bars":   t.hold_bars,
+                        "pt_pct":      t.profit_target_pct,
+                        "sl_pct":      t.stop_loss_pct,
+                    } for t in card_trades])
+                    ct.sort_values("entry_ts", inplace=True)
+
+                    wins   = (ct["outcome"] == "win").sum()
+                    losses = (ct["outcome"] == "loss").sum()
+                    total  = len(ct)
+                    wr     = wins / total if total else 0
+                    aw     = ct.loc[ct["outcome"]=="win",  "pnl_pct"].mean() or 0
+                    al     = ct.loc[ct["outcome"]=="loss", "pnl_pct"].mean() or 0
+                    exp    = wr * aw + (1 - wr) * al
+
+                    # Dollar PnL column
+                    ct["dollar_pnl"] = (ct["pnl_pct"] / 100) * card_trade_size
+                    ct["equity"]     = card_budget + ct["dollar_pnl"].cumsum()
+
+                    r1, r2, r3, r4, r5 = st.columns(5)
+                    r1.metric("Trades",       total)
+                    r2.metric("Win Rate",     f"{wr:.1%}")
+                    r3.metric("Expectancy",   f"{exp:.2f}%")
+                    r4.metric("Total PnL %",  f"{ct['pnl_pct'].sum():.2f}%")
+                    r5.metric("Total PnL $",  f"${ct['dollar_pnl'].sum():.2f}")
+
+                    # Equity curve
+                    eq_fig = go.Figure()
+                    eq_fig.add_trace(go.Scatter(
+                        x=ct["entry_ts"], y=ct["equity"],
+                        mode="lines", name="Equity",
+                        line=dict(color="#26a69a", width=2),
+                    ))
+                    eq_fig.update_layout(
+                        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                        font=dict(color="#cccccc"), height=220,
+                        xaxis=dict(gridcolor="#1e2530"),
+                        yaxis=dict(gridcolor="#1e2530", title="Equity $"),
+                        margin=dict(t=10, b=20),
+                    )
+                    st.plotly_chart(eq_fig, width='stretch')
+
+                    st.dataframe(ct.rename(columns={
+                        "ticker":"Ticker", "entry_ts":"Entry", "entry_price":"Entry $",
+                        "exit_price":"Exit $", "pnl_pct":"PnL %", "outcome":"Outcome",
+                        "hold_bars":"Bars", "pt_pct":"TP%", "sl_pct":"SL%",
+                        "dollar_pnl":"PnL $",
+                    }).drop(columns=["equity"], errors="ignore"),
+                        width='stretch', hide_index=True)
+                else:
+                    st.warning(
+                        f"No trades fired with score \u2265 {card_min_score}. "
+                        f"**{len(bars_map)}/{len(tickers)} tickers had bars** "
+                        f"({len(missing_cache)} fetched live). "
+                        f"Check the terminal / logs for per-date component scores "
+                        f"(pattern / adx / rr / confluence / history) \u2014 "
+                        f"logging level INFO is required (`--log-level info`)."
+                    )
+                    if not bars_map:
+                        st.error(
+                            "\u274c No bar data found at all. "
+                            "Go to **Morning Brief** and let it refresh tickers first, "
+                            "or run `refresh_cache.py` to seed the 30-day parquet cache."
+                        )
+                    elif len(bars_map) < len(tickers):
+                        st.info(
+                            f"\u2139\ufe0f {len(tickers) - len(bars_map)} ticker(s) had no bars and were skipped: "
+                            + ", ".join(t for t in tickers if t not in bars_map)
+                        )
+            except Exception as exc:
+                import traceback
+                st.error(f"Card strategy backtest error: {exc}")
+                st.code(traceback.format_exc())
+
     # ── Deep-link to chart viewer ─────────────────────────────────────────────
     st.markdown("---")
     st.subheader("Drill into a ticker")

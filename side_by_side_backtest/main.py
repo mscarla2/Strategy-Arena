@@ -223,6 +223,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # Score gate
+    p.add_argument(
+        "--min-score",
+        type=float,
+        default=0.0,
+        help=(
+            "Only simulate entries whose SetupScore ≥ this value (0–10). "
+            "Mirrors the min-score slider in the Morning Brief. "
+            "Example: --min-score 5 runs only WATCH/STRONG setups. "
+            "Default: 0 (no filter — all entries simulated)."
+        ),
+    )
+
     # Report
     p.add_argument(
         "--output-dir",
@@ -253,6 +266,48 @@ def phase_parse(args, db) -> list:
     inserted = db.upsert_entries(entries)
     print(f"[main] Inserted {inserted} new entries into DB ({len(entries)} total parsed).")
     return entries
+
+
+def phase_score_gate(args, entries, bars_map) -> list:
+    """
+    Filter entries whose SetupScore < args.min_score.
+    Scores are computed using the existing score_setup() function.
+    Only runs when --min-score > 0 to avoid the overhead on default runs.
+    """
+    if not getattr(args, "min_score", 0.0) or args.min_score <= 0:
+        return entries
+
+    from .setup_scorer import score_setup
+    from .db import WatchlistDB
+
+    threshold = args.min_score
+    print(f"\n[main] Score gate: filtering entries with SetupScore < {threshold} …")
+
+    db_path = args.db or str(Path(__file__).parent / "watchlist_backtest.db")
+    db_inst  = WatchlistDB(db_path).connect()
+
+    kept, dropped = [], 0
+    for entry in entries:
+        bars = bars_map.get(entry.ticker)
+        if bars is None or bars.empty:
+            # No bars → can't score → keep to avoid silent data loss
+            kept.append(entry)
+            continue
+        try:
+            sc = score_setup(entry, bars, db_inst)
+            if sc.score >= threshold:
+                kept.append(entry)
+            else:
+                dropped += 1
+        except Exception:
+            kept.append(entry)  # scoring error → keep
+
+    db_inst.close()
+    print(
+        f"[main] Score gate: kept {len(kept)}/{len(entries)} entries "
+        f"(dropped {dropped} below {threshold})."
+    )
+    return kept
 
 
 def phase_fetch(args, entries, db) -> dict:
@@ -514,6 +569,16 @@ def main(argv=None) -> None:
         if not bars_map:
             print("[main] No OHLCV data fetched — cannot simulate. Exiting.")
             return
+
+        # ── Score gate (optional) ────────────────────────────────────────
+        if getattr(args, "min_score", 0.0) > 0:
+            entries = phase_score_gate(args, entries, bars_map)
+            if not entries:
+                print(
+                    f"[main] Score gate filtered ALL entries "
+                    f"(min_score={args.min_score}). Nothing to simulate."
+                )
+                return
 
         # ── Phase 3: Single-pass ─────────────────────────────────────────
         single_trades = phase_single_run(args, entries, bars_map)

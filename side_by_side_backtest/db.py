@@ -51,6 +51,45 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 """
 
+# actual_trades — real or paper autonomous fills (separate from simulated trades)
+_ACTUAL_TRADES_DDL = """
+CREATE TABLE IF NOT EXISTS actual_trades (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker          TEXT    NOT NULL,
+    source          TEXT    NOT NULL DEFAULT 'paper',       -- 'paper' | 'live'
+    strategy_name   TEXT    NOT NULL DEFAULT 'backtest',    -- 'card_strategy' | 'backtest_strategy'
+    setup_score     REAL    NOT NULL DEFAULT 0.0,           -- SetupScore at entry time
+
+    -- Entry
+    entry_ts        TEXT    NOT NULL,
+    entry_price     REAL    NOT NULL,
+    quantity        INTEGER NOT NULL DEFAULT 0,
+    order_id        TEXT,                                   -- Schwab order ID (live only)
+
+    -- Exit
+    exit_ts         TEXT,
+    exit_price      REAL,
+    exit_reason     TEXT    NOT NULL DEFAULT 'open',        -- 'pt'|'sl'|'momentum_fade'|'time_stop'|'open'
+
+    -- P&L
+    pnl_dollar      REAL    NOT NULL DEFAULT 0.0,
+    pnl_pct         REAL    NOT NULL DEFAULT 0.0,
+    outcome         TEXT    NOT NULL DEFAULT 'open',        -- 'win'|'loss'|'open'
+
+    -- Parameters used
+    pt_pct          REAL    NOT NULL DEFAULT 0.0,
+    sl_pct          REAL    NOT NULL DEFAULT 0.0,
+    session_type    TEXT    NOT NULL DEFAULT 'unknown',
+
+    UNIQUE(ticker, entry_ts, source, strategy_name)
+);
+"""
+
+# Migration: add strategy_name column to existing actual_trades tables
+_ACTUAL_TRADES_MIGRATION = [
+    "ALTER TABLE actual_trades ADD COLUMN strategy_name TEXT NOT NULL DEFAULT 'backtest'",
+]
+
 # Migration: add analysis-tag columns to existing databases that pre-date Phase A.
 # Each ALTER TABLE is guarded by a try/except so it's safe to run on a fresh DB
 # (which already has the columns from _CREATE_DDL) and on any legacy DB.
@@ -79,10 +118,9 @@ class WatchlistDB:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._conn.executescript(_CREATE_DDL)
+        self._conn.executescript(_ACTUAL_TRADES_DDL)
         # Run schema migrations — safe on both new and legacy DBs.
-        # SQLite raises OperationalError "duplicate column name" if the column
-        # already exists; we catch that and move on.
-        for stmt in _MIGRATION_DDL:
+        for stmt in _MIGRATION_DDL + _ACTUAL_TRADES_MIGRATION:
             try:
                 self._conn.execute(stmt)
             except sqlite3.OperationalError:
@@ -230,6 +268,18 @@ class WatchlistDB:
         self.conn.execute("DELETE FROM trades")
         self.conn.commit()
 
+    def clear_actual_trades(self) -> None:
+        """Delete all rows from actual_trades (paper and live). Use for DB reset."""
+        self.conn.execute("DELETE FROM actual_trades")
+        self.conn.commit()
+
+    def clear_all(self) -> None:
+        """Wipe ALL tables — watchlist_entries, trades, actual_trades."""
+        self.conn.execute("DELETE FROM actual_trades")
+        self.conn.execute("DELETE FROM trades")
+        self.conn.execute("DELETE FROM watchlist_entries")
+        self.conn.commit()
+
     def load_trades(self, profit_target_pct: Optional[float] = None) -> list:
         """Load TradeResult rows."""
         from .models import SessionType, TradeResult  # local import
@@ -269,3 +319,123 @@ class WatchlistDB:
                 )
             )
         return results
+
+    # ------------------------------------------------------------------
+    # actual_trades — autonomous / paper trade fills
+    # ------------------------------------------------------------------
+
+    def insert_actual_trade(self, trade: dict) -> int:
+        """
+        Insert one actual (paper or live) trade into actual_trades.
+
+        trade dict keys (all optional except ticker, entry_ts, entry_price):
+          ticker, source, strategy_name, setup_score, entry_ts, entry_price,
+          quantity, order_id, exit_ts, exit_price, exit_reason, pnl_dollar,
+          pnl_pct, outcome, pt_pct, sl_pct, session_type
+        Returns the row id.
+        """
+        cur = self.conn.execute(
+            """
+            INSERT OR IGNORE INTO actual_trades
+                (ticker, source, strategy_name, setup_score,
+                 entry_ts, entry_price, quantity,
+                 order_id, exit_ts, exit_price, exit_reason,
+                 pnl_dollar, pnl_pct, outcome, pt_pct, sl_pct, session_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade.get("ticker", ""),
+                trade.get("source", "paper"),
+                trade.get("strategy_name", "backtest_strategy"),
+                trade.get("setup_score", 0.0),
+                str(trade.get("entry_ts", "")),
+                trade.get("entry_price", 0.0),
+                trade.get("quantity", 0),
+                trade.get("order_id"),
+                str(trade.get("exit_ts", "")) if trade.get("exit_ts") else None,
+                trade.get("exit_price"),
+                trade.get("exit_reason", "open"),
+                trade.get("pnl_dollar", 0.0),
+                trade.get("pnl_pct", 0.0),
+                trade.get("outcome", "open"),
+                trade.get("pt_pct", 0.0),
+                trade.get("sl_pct", 0.0),
+                trade.get("session_type", "unknown"),
+            ),
+        )
+        self.conn.commit()
+        return cur.lastrowid or 0
+
+    def update_actual_trade_exit(self, row_id: int, exit_ts: str, exit_price: float,
+                                  exit_reason: str, pnl_dollar: float,
+                                  pnl_pct: float, outcome: str) -> None:
+        """Update exit fields on an open actual_trade row."""
+        self.conn.execute(
+            """
+            UPDATE actual_trades
+            SET exit_ts=?, exit_price=?, exit_reason=?,
+                pnl_dollar=?, pnl_pct=?, outcome=?
+            WHERE id=?
+            """,
+            (exit_ts, exit_price, exit_reason, pnl_dollar, pnl_pct, outcome, row_id),
+        )
+        self.conn.commit()
+
+    def load_actual_trades(self, source: Optional[str] = None,
+                           strategy_name: Optional[str] = None,
+                           open_only: bool = False) -> list:
+        """
+        Return actual_trades rows as plain dicts.
+        source='paper'|'live'|None (all).
+        strategy_name='card_strategy'|'backtest_strategy'|None (all).
+        open_only=True returns only rows where outcome='open'.
+        """
+        clauses, params = ["1=1"], []
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if strategy_name:
+            clauses.append("strategy_name = ?")
+            params.append(strategy_name)
+        if open_only:
+            clauses.append("outcome = 'open'")
+        rows = self.conn.execute(
+            f"SELECT * FROM actual_trades WHERE {' AND '.join(clauses)} "
+            "ORDER BY entry_ts ASC",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def daily_pnl(self, date_iso: str, source: Optional[str] = None) -> float:
+        """
+        Sum of pnl_dollar for all closed actual_trades on date_iso (YYYY-MM-DD).
+        Used by the circuit breaker in the Decision Engine.
+        """
+        clauses = ["DATE(exit_ts) = ?", "outcome != 'open'"]
+        params: list = [date_iso]
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        row = self.conn.execute(
+            f"SELECT COALESCE(SUM(pnl_dollar), 0.0) FROM actual_trades "
+            f"WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
+    def open_position_count(self, source: Optional[str] = None,
+                            strategy_name: Optional[str] = None) -> int:
+        """Count of actual_trades rows currently open (outcome='open')."""
+        clauses = ["outcome = 'open'"]
+        params: list = []
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if strategy_name:
+            clauses.append("strategy_name = ?")
+            params.append(strategy_name)
+        row = self.conn.execute(
+            f"SELECT COUNT(*) FROM actual_trades WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchone()
+        return int(row[0]) if row else 0

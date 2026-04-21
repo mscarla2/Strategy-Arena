@@ -279,6 +279,7 @@ def simulate_entry(
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
             max_loss_pct=max_loss_pct,
+            max_forward_days=2,   # same default as --forward-days; prevents 30d-cache blowup
         )
 
     session = entry.session_type
@@ -593,6 +594,7 @@ def simulate_eqh_breakout(
     eqh_open_tolerance_pct: float = 0.02,
     body_clear_pct: float = 0.003,
     max_bars_after_pair: int = 5,
+    max_forward_days: int = 2,
 ) -> List[TradeResult]:
     """
     Simulate the EQH Breakout strategy independently of the bearish S×S mode.
@@ -609,9 +611,18 @@ def simulate_eqh_breakout(
          OR price <= entry * (1 - stop_loss_pct / 100)
       C. Time-Stop:    forced exit at session close
 
+    Parameters
+    ----------
+    max_forward_days : int
+        Maximum calendar days of bars to scan after the post timestamp.
+        Defaults to 2 (same window as the S×S simulator's --forward-days).
+        This prevents the simulator from scanning weeks of 30d-cache data
+        when the user passes the rolling parquet without --skip-fetch.
+
     Returns a list of TradeResult objects (typically 0 or 1 per session).
     """
     from .pattern_engine import detect_equal_highs_pair, detect_eqh_signal
+    from datetime import timedelta
 
     if bars.empty:
         return []
@@ -620,9 +631,16 @@ def simulate_eqh_breakout(
     ticker  = entry.ticker
     bars.attrs["ticker"] = ticker
 
-    # Filter to post-timestamp window
+    # Filter to post-timestamp window (lower bound)
     if entry.post_timestamp is not None:
-        bars = bars[bars.index >= entry.post_timestamp]
+        post_utc = entry.post_timestamp
+        bars = bars[bars.index >= post_utc]
+        # Upper bound: clip to max_forward_days after the post date
+        # This ensures the simulator only looks at the 1–2 trading days that
+        # are relevant to the watchlist setup, not weeks of stale 30d-cache data.
+        if max_forward_days > 0:
+            cutoff = post_utc + timedelta(days=max_forward_days)
+            bars = bars[bars.index <= cutoff]
     if bars.empty:
         return []
 

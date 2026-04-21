@@ -49,9 +49,15 @@ performance = st.Page(
     icon="📊",
 )
 
+autonomous_pnl = st.Page(
+    str(_PAGES_DIR / "4_autonomous_pnl.py"),
+    title="Autonomous PnL",
+    icon="🤖",
+)
+
 # ---------------------------------------------------------------------------
 # Navigation
 # ---------------------------------------------------------------------------
 
-pg = st.navigation([morning_brief, chart_viewer, performance])
+pg = st.navigation([morning_brief, chart_viewer, performance, autonomous_pnl])
 pg.run()

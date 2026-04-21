@@ -59,6 +59,12 @@ class SetupScore:
     rr_score:           float = 0.0   # 0 = no levels, 1 = R/R<1.5, 2 = R/R≥2.0
     confluence_score:   float = 0.0   # 0 = none, 1 = 1 method, 2 = 2+ methods agree
     history_score:      float = 0.0   # 0 = no data, 1 = WR<50%, 2 = WR≥60%
+
+    # Extended history fields (enhancement #1 and #2)
+    history_avg_win:    float = 0.0   # avg pnl% of winning trades for this ticker
+    history_avg_loss:   float = 0.0   # avg pnl% of losing trades for this ticker
+    history_expectancy: float = 0.0   # wr*avg_win + (1-wr)*avg_loss
+    history_streak:     str   = ""    # last-5 outcomes e.g. "✅✅❌✅✅"
     role_reversal_score: float = 0.0  # 0 = no flip, 1 = possible, 2 = confirmed R→S flip
     rejection_score:    float = 0.0   # 0 = 0 rejections, 1 = 1, 2 = 2+ wick rejections
     rel_vol_score:      float = 0.0   # 0 = <1.5×, 1 = 1.5-2×, 2 = ≥2× same-TOD volume
@@ -201,7 +207,10 @@ def _score_rr(
     Returns (score, rr_ratio, stop_price).
     """
     if not support or not resistance or support <= 0 or resistance <= entry:
-        return 0.0, 0.0, support or 0.0
+        # No valid TP — R/R cannot be computed. stop_price falls back to the
+        # already-computed SL (entry * 0.98) that score_setup sets before calling us,
+        # but since we don't have it here, return entry * 0.98 as the best default.
+        return 0.0, 0.0, entry * 0.98
 
     # Stop = explicit stop if given; otherwise 1% below entry (matches simulator SL default).
     # Previously used support * 0.98 — but the simulator now treats SL as entry * (1 - sl%),
@@ -274,18 +283,33 @@ def _score_confluence(bars: pd.DataFrame, support: Optional[float], ticker: str 
     return 0.0, "no confluence"
 
 
-def _load_all_history(db_path: Optional[str] = None) -> dict:
+def _load_all_history(
+    db_path: Optional[str] = None,
+    cutoff_date=None,
+) -> dict:
     """
-    Load ALL trades from the DB once and return a {ticker: (score, win_rate, n)}
-    lookup dict.  Results are cached in _history_cache for _HISTORY_CACHE_TTL seconds
-    so the expensive SQLite open only happens once per live-scan interval rather than
-    once per ticker (N × 85ms → 1 × 85ms total).
+    Load trades from the DB and return a {ticker: (score, win_rate, n, ...)} lookup.
+
+    Results are cached in _history_cache for _HISTORY_CACHE_TTL seconds so the
+    expensive SQLite open only happens once per live-scan interval.
+
+    cutoff_date : Optional[date]
+        When provided (backtest context), only trades with entry_ts BEFORE this
+        date are counted.  This prevents future trades from leaking into the
+        history score during historical replay (Bug #1 fix).
+        When None (live scoring), all trades are included as before.
     """
     from pathlib import Path
 
     now_t = _time.monotonic()
+
+    # Cache key: use "_all" for live (no cutoff) or the ISO date string for backtest.
+    # This ensures that live scoring still hits the fast path, while each historical
+    # date gets its own isolated snapshot without polluting the live cache.
+    cache_key = "_all" if cutoff_date is None else str(cutoff_date)
+
     with _history_cache_lock:
-        cached = _history_cache.get("_all")
+        cached = _history_cache.get(cache_key)
     if cached and (now_t - cached[0]) < _HISTORY_CACHE_TTL:
         return cached[1]
 
@@ -305,6 +329,25 @@ def _load_all_history(db_path: Optional[str] = None) -> dict:
     except Exception:
         return {}
 
+    # Bug #1 fix: when a cutoff_date is provided, drop trades on/after that date.
+    # This stops future-trade data from inflating the history_score during backtest.
+    if cutoff_date is not None:
+        from datetime import date as _date
+        filtered = []
+        for t in all_trades:
+            try:
+                ts = t.entry_ts
+                # entry_ts can be a datetime or an ISO string
+                if isinstance(ts, str):
+                    from datetime import datetime as _dt
+                    ts = _dt.fromisoformat(ts)
+                trade_date = ts.date() if hasattr(ts, "date") else ts
+                if trade_date < cutoff_date:
+                    filtered.append(t)
+            except Exception:
+                filtered.append(t)   # parse error → include (safe default)
+        all_trades = filtered
+
     # Build per-ticker summary
     from collections import defaultdict
     groups: dict = defaultdict(list)
@@ -314,41 +357,75 @@ def _load_all_history(db_path: Optional[str] = None) -> dict:
     lookup: dict = {}
     for tkr, trades in groups.items():
         total = len(trades)
+
+        # Sort chronologically for streak calculation
+        sorted_trades = sorted(trades, key=lambda t: getattr(t, "entry_ts", ""))
+
         if total < 3:
-            lookup[tkr] = (0.0, 0.0, total)
+            lookup[tkr] = (0.0, 0.0, total, 0.0, 0.0, 0.0, "")
             continue
-        wins = sum(1 for t in trades if t.outcome == "win")
-        wr   = wins / total
+
+        wins       = [t for t in sorted_trades if t.outcome == "win"]
+        losses     = [t for t in sorted_trades if t.outcome == "loss"]
+        n_wins     = len(wins)
+        wr         = n_wins / total
+        avg_win    = sum(t.pnl_pct for t in wins)  / n_wins  if wins   else 0.0
+        avg_loss   = sum(t.pnl_pct for t in losses)/ len(losses) if losses else 0.0
+        expectancy = wr * avg_win + (1 - wr) * avg_loss
+
+        # Last-5 streak: "✅✅❌✅✅" using the 5 most recent trades
+        last5 = sorted_trades[-5:]
+        streak_str = "".join("✅" if t.outcome == "win" else "❌" for t in last5)
+
         if wr >= 0.60:
-            lookup[tkr] = (2.0, round(wr, 3), total)
+            score = 2.0
         elif wr >= 0.30:
-            lookup[tkr] = (1.0, round(wr, 3), total)
+            score = 1.0
         else:
-            lookup[tkr] = (0.0, round(wr, 3), total)
+            score = 0.0
+
+        lookup[tkr] = (
+            score,
+            round(wr, 3),
+            total,
+            round(avg_win, 3),
+            round(avg_loss, 3),
+            round(expectancy, 3),
+            streak_str,
+        )
 
     with _history_cache_lock:
-        _history_cache["_all"] = (now_t, lookup)
+        _history_cache[cache_key] = (now_t, lookup)
     return lookup
 
 
-def _score_history(ticker: str, db_path: Optional[str] = None) -> tuple[float, float, int]:
+def _score_history(
+    ticker: str,
+    db_path: Optional[str] = None,
+    cutoff_date=None,
+) -> tuple:
     """
     History score (0–2) from the trade DB win-rate for this ticker.
       2 = win-rate ≥ 60%
       1 = win-rate 30–59%
       0 = fewer than 3 trades or win-rate < 30%
-    Returns (score, win_rate, total_trades).
+    Returns (score, win_rate, total_trades, avg_win, avg_loss, expectancy, streak_str).
+
+    cutoff_date : Optional[date]
+        When provided, only trades before this date are counted (Bug #1 fix).
 
     Optimised: loads all trades once per _HISTORY_CACHE_TTL (60s) and caches
     the per-ticker lookup dict — eliminates the N × SQLite-open overhead.
     """
-    lookup = _load_all_history(db_path)
+    lookup = _load_all_history(db_path, cutoff_date=cutoff_date)
     result = lookup.get(ticker.upper())
     if result is None:
-        return 0.0, 0.0, 0
-    score, wr, total = result
-    return score, wr, total
-    return 0.0, round(wr, 3), total
+        return 0.0, 0.0, 0, 0.0, 0.0, 0.0, ""
+    # Unpack: supports both old 3-tuple (legacy) and new 7-tuple
+    if len(result) == 7:
+        return result
+    score, wr, total = result[:3]
+    return score, wr, total, 0.0, 0.0, 0.0, ""
 
 
 def _score_role_reversal(bars: pd.DataFrame, support: Optional[float]) -> tuple[float, bool]:
@@ -671,18 +748,31 @@ def _score_eqh(
 # ---------------------------------------------------------------------------
 
 def score_setup(
-    entry,                          # WatchlistEntry
+    entry,                              # WatchlistEntry
     bars: pd.DataFrame,
     db_path: Optional[str] = None,
+    *,
+    disable_sr_cache: bool = False,
+    cutoff_date=None,
 ) -> "SetupScore":
     """
     Compute a composite SetupScore for *entry* given its OHLCV bars.
 
     Parameters
     ----------
-    entry    : WatchlistEntry — parsed ticker + support/resistance/stop levels.
-    bars     : pd.DataFrame  — 5-min OHLCV bars (UTC DatetimeIndex).
-    db_path  : path to SQLite trade DB; defaults to the package default.
+    entry            : WatchlistEntry — parsed ticker + support/resistance/stop levels.
+    bars             : pd.DataFrame  — 5-min OHLCV bars (UTC DatetimeIndex).
+    db_path          : path to SQLite trade DB; defaults to the package default.
+    disable_sr_cache : bool (default False)
+        When True, bypass the per-ticker S/R cache so that S/R levels are
+        recomputed from the bars slice rather than returned from a stale cache
+        entry that was computed at a different price.  Used by the card
+        simulator so each historical date gets its own fresh levels (Bug #2 fix).
+    cutoff_date      : Optional[date]
+        When provided, the history_score component only counts trades with
+        entry_ts < cutoff_date.  Prevents future trades from leaking into the
+        score during historical replay (Bug #1 fix).
+        Pass None (default) for live scoring — no change to existing behaviour.
     """
     # ── Smart S/R resolution ──────────────────────────────────────────────────
     # 1. Use watchlist levels if present AND within 30% of current price.
@@ -715,8 +805,13 @@ def score_setup(
     if not bars.empty and (_support_stale or _resistance_stale):
         now_t2 = _time.monotonic()
         _fb_key = f"_fallback_{entry.ticker}"
-        with _sr_cache_lock:
-            cached2 = _sr_cache.get(_fb_key)
+        # Bug #2 fix: when disable_sr_cache=True (backtest context), always
+        # recompute S/R from the current bars slice rather than reading back
+        # a cached result that was anchored to a different (more recent) price.
+        cached2 = None
+        if not disable_sr_cache:
+            with _sr_cache_lock:
+                cached2 = _sr_cache.get(_fb_key)
         if cached2 and (now_t2 - cached2[0]) < _SR_CACHE_TTL:
             sr = cached2[1]
         else:
@@ -724,17 +819,49 @@ def score_setup(
             sr = compute_sr_levels(bars.iloc[-_SCORE_BARS:] if len(bars) > _SCORE_BARS else bars,
                                    current_price=current_price, price_range_pct=_RELEVANCE_GATE,
                                    use_kmeans=False)
-            with _sr_cache_lock:
-                _sr_cache[_fb_key] = (now_t2, sr)
+            if not disable_sr_cache:
+                with _sr_cache_lock:
+                    _sr_cache[_fb_key] = (now_t2, sr)
 
         if _support_stale:
             support = sr.nearest_support(current_price) or support
 
         if _resistance_stale:
             # Use computed nearest resistance above current price.
-            # If none found within the band → None (no TP), NOT the stale watchlist value.
+            # If none found within the narrow band, widen to 40% so the card always
+            # shows a meaningful TP rather than "—".
             computed_res = sr.nearest_resistance(current_price)
-            resistance = computed_res if (computed_res and computed_res > current_price) else None
+            if computed_res and computed_res > current_price:
+                resistance = computed_res
+            else:
+                # Retry with a wider band (40%) — we'd rather show a real level
+                # than leave TP blank on the card.
+                from .sr_engine import compute_sr_levels as _csl_wide
+                sr_wide = _csl_wide(
+                    bars.iloc[-_SCORE_BARS:] if len(bars) > _SCORE_BARS else bars,
+                    current_price=current_price, price_range_pct=0.40,
+                    use_kmeans=False,
+                )
+                wide_res = sr_wide.nearest_resistance(current_price)
+                resistance = wide_res if (wide_res and wide_res > current_price) else None
+
+    # If resistance is still None after all fallbacks, make one last attempt with a
+    # very wide band (60%) — always better to show a computed TP than "—".
+    # BUG FIX: use a distinct cache key (_fallback_wide_) so this path never reads
+    # back the narrow 15%-band SR object that was cached under _fallback_{ticker}.
+    def _wide_resistance(price: float) -> Optional[float]:
+        """Always compute fresh 60%-band SR and return nearest resistance above price."""
+        from .sr_engine import compute_sr_levels as _csl_w
+        sr_w = _csl_w(
+            bars.iloc[-_SCORE_BARS:] if len(bars) > _SCORE_BARS else bars,
+            current_price=price, price_range_pct=0.60,
+            use_kmeans=False,
+        )
+        res = sr_w.nearest_resistance(price)
+        return res if (res and res > price) else None
+
+    if resistance is None and not bars.empty and current_price > 0:
+        resistance = _wide_resistance(current_price)
 
     # If current price is already below support, the support level was broken.
     # Re-anchor: entry = current_price, find nearest computed S/R around current price.
@@ -743,8 +870,11 @@ def score_setup(
     if support_broken and not bars.empty:
         # Always re-fetch computed S/R anchored to current_price so that
         # both support and resistance are on the correct side of the entry.
-        with _sr_cache_lock:
-            cached3 = _sr_cache.get(f"_fallback_{entry.ticker}")
+        # Bug #2 fix: bypass cache when disable_sr_cache=True (backtest context).
+        cached3 = None
+        if not disable_sr_cache:
+            with _sr_cache_lock:
+                cached3 = _sr_cache.get(f"_fallback_{entry.ticker}")
         sr3 = cached3[1] if cached3 else None
         if sr3 is None:
             # Cache miss — compute now
@@ -754,8 +884,9 @@ def score_setup(
                 current_price=current_price, price_range_pct=_RELEVANCE_GATE,
                 use_kmeans=False,
             )
-            with _sr_cache_lock:
-                _sr_cache[f"_fallback_{entry.ticker}"] = (_time.monotonic(), sr3)
+            if not disable_sr_cache:
+                with _sr_cache_lock:
+                    _sr_cache[f"_fallback_{entry.ticker}"] = (_time.monotonic(), sr3)
 
         new_sup = sr3.nearest_support(current_price)
         new_res = sr3.nearest_resistance(current_price)
@@ -770,7 +901,10 @@ def score_setup(
         if new_res and new_res > current_price:
             resistance = new_res
         else:
-            resistance = None   # no valid TP — _score_rr will return 0
+            # BUG FIX: the wide-band retry must happen AFTER support_broken re-anchor,
+            # not before it.  Previous code set resistance=None here with a comment
+            # "will be filled by wide-band retry below" — but there was no retry below.
+            resistance = _wide_resistance(current_price)
 
     # Entry is always the current price when trading; never use a stale watchlist
     # support level as the entry (that's where you'd set a limit order, not where
@@ -778,6 +912,11 @@ def score_setup(
     # • support_broken  → price already below watchlist level → enter at current price
     # • normal case     → watchlist support IS the entry target (limit order zone)
     entry_price = current_price if support_broken else (support or current_price or 0.0)
+
+    # SL fallback: if watchlist didn't provide an explicit stop, default to 2% below
+    # entry (per README Step 5 — "Stop-Loss 2% below support").
+    if not stop or stop <= 0:
+        stop = entry_price * 0.98
 
     # Slice to last _SCORE_BARS for all component scorers (reduces compute 7×)
     sb = bars.iloc[-_SCORE_BARS:] if len(bars) > _SCORE_BARS else bars
@@ -791,8 +930,17 @@ def score_setup(
     pat_s,   pat_found, pat_type    = _score_pattern(sb, support)
     adx_s,   adx_val                = _score_adx(sb)
     rr_s,    rr_ratio, stop_price   = _score_rr(support, resistance, stop, entry_price)
-    conf_s,  conf_desc              = _score_confluence(sb, support, ticker=entry.ticker)
-    hist_s,  win_rate, n_trades     = _score_history(entry.ticker, db_path)
+    # Bug #2 fix: pass disable_cache=True in backtest context so confluence
+    # S/R levels are computed from this historical slice, not today's cache.
+    conf_s,  conf_desc              = _score_confluence(
+        sb, support,
+        ticker=("" if disable_sr_cache else entry.ticker),
+    )
+    # Bug #1 fix: pass cutoff_date so history_score only uses trades that
+    # existed at this point in time during historical replay.
+    hist_s, win_rate, n_trades, avg_win, avg_loss, hist_expectancy, hist_streak = _score_history(
+        entry.ticker, db_path, cutoff_date=cutoff_date,
+    )
     rr_rev_s, is_role_rev           = _score_role_reversal(sb, support)
     rej_s,   rej_count              = _score_rejections(sb, support)
     rv_s,    rv_ratio               = _score_relative_volume(sb)
@@ -817,6 +965,10 @@ def score_setup(
         rr_score=rr_s,
         confluence_score=conf_s,
         history_score=hist_s,
+        history_avg_win=avg_win,
+        history_avg_loss=avg_loss,
+        history_expectancy=hist_expectancy,
+        history_streak=hist_streak,
         role_reversal_score=rr_rev_s,
         rejection_score=rej_s,
         rel_vol_score=rv_s,

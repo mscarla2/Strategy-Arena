@@ -22,6 +22,31 @@ import streamlit.components.v1 as components
 import time as _wall_clock   # wall-clock used for refresh-cooldown guard
 
 # ---------------------------------------------------------------------------
+# Pinned tickers — persisted to disk so they survive page refreshes
+# ---------------------------------------------------------------------------
+_PINNED_PATH = Path(__file__).parent.parent / "pinned_tickers.json"
+
+
+def _load_pinned() -> list[str]:
+    """Load pinned tickers from disk; return [] if file missing or corrupt."""
+    try:
+        if _PINNED_PATH.exists():
+            data = json.loads(_PINNED_PATH.read_text())
+            if isinstance(data, list):
+                return [t.upper().strip() for t in data if isinstance(t, str) and t.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _save_pinned(tickers: list[str]) -> None:
+    """Persist pinned tickers to disk."""
+    try:
+        _PINNED_PATH.write_text(json.dumps(sorted(set(tickers)), indent=2))
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------------------
 # Alert sound (base64-embedded so no file-serving needed)
 # ---------------------------------------------------------------------------
 _SOUND_PATH = Path(__file__).parent / "effect.mp3"
@@ -339,7 +364,53 @@ def _sidebar() -> tuple[str, Optional[str]]:
     if st.sidebar.button("🔄 Refresh data"):
         st.cache_data.clear()
 
-    return json_path, session_filter, post_filter, scan_interval, min_score
+    # ── Pinned tickers ────────────────────────────────────────────────────────
+    st.sidebar.divider()
+    st.sidebar.subheader("📌 Pinned Tickers")
+    st.sidebar.caption("Always scored, even if not in today's watchlist.")
+
+    # Initialise session state from disk on first load
+    if "pinned_tickers" not in st.session_state:
+        st.session_state["pinned_tickers"] = _load_pinned()
+
+    pinned: list[str] = st.session_state["pinned_tickers"]
+
+    # Input + Add
+    new_ticker = st.sidebar.text_input(
+        "Add ticker", value="", placeholder="e.g. ENVB",
+        key="pin_input",
+        label_visibility="collapsed",
+    ).upper().strip()
+    col_add, col_rem = st.sidebar.columns(2)
+    if col_add.button("➕ Add", key="pin_add", width='stretch'):
+        if new_ticker and new_ticker not in pinned:
+            pinned.append(new_ticker)
+            st.session_state["pinned_tickers"] = pinned
+            _save_pinned(pinned)
+            st.rerun()
+        elif new_ticker in pinned:
+            st.sidebar.warning(f"{new_ticker} already pinned.")
+
+    # Remove dropdown
+    if pinned:
+        remove_choice = st.sidebar.selectbox(
+            "Remove", ["— select —"] + pinned, key="pin_remove_select",
+            label_visibility="collapsed",
+        )
+        if col_rem.button("➖ Remove", key="pin_rem", width='stretch'):
+            if remove_choice != "— select —" and remove_choice in pinned:
+                pinned.remove(remove_choice)
+                st.session_state["pinned_tickers"] = pinned
+                _save_pinned(pinned)
+                st.rerun()
+    else:
+        st.sidebar.info("No pinned tickers yet.")
+
+    # Show current pins
+    if pinned:
+        st.sidebar.markdown("**Pinned:** " + "  ".join(f"`{t}`" for t in sorted(pinned)))
+
+    return json_path, session_filter, post_filter, scan_interval, min_score, list(pinned)
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +432,8 @@ def _format_note(note: str) -> str:
     return "\n".join(lines)
 
 
-def _render_card(sc: SetupScore, idx: int, score_history: list = None) -> None:
+def _render_card(sc: SetupScore, idx: int, score_history: list = None,
+                 is_pinned: bool = False) -> None:
     """Render an expanded setup card for one ticker inside a Streamlit expander."""
     # Compute delta arrow for the header
     delta_str = ""
@@ -371,7 +443,8 @@ def _render_card(sc: SetupScore, idx: int, score_history: list = None) -> None:
         elif diff < -0.05: delta_str = f" 🔴▼{abs(diff):.1f}"
         else:              delta_str = " ⬜="
 
-    header = f"{sc.ticker}  ●  {sc.score}/10{delta_str}  ●  {sc.signal}"
+    pin_prefix = "📌 " if is_pinned else ""
+    header = f"{pin_prefix}{sc.ticker}  ●  {sc.score}/10{delta_str}  ●  {sc.signal}"
     with st.expander(header, expanded=False):
         # ── Session score sparkline ──────────────────────────────────────
         if score_history and len(score_history) >= 3:
@@ -421,6 +494,21 @@ def _render_card(sc: SetupScore, idx: int, score_history: list = None) -> None:
         for label, val in score_rows:
             st.text(f"  {label:<12} {_bar(val)}  {val:.1f}/2")
 
+        # ── Enhanced history stats (card enhancements #1 and #2) ─────────
+        if getattr(sc, "history_expectancy", 0.0) != 0.0 or getattr(sc, "history_streak", ""):
+            st.markdown("**Historical performance (simulated trades):**")
+            hcols = st.columns(3)
+            exp_val  = getattr(sc, "history_expectancy", 0.0)
+            aw_val   = getattr(sc, "history_avg_win",    0.0)
+            al_val   = getattr(sc, "history_avg_loss",   0.0)
+            streak   = getattr(sc, "history_streak",     "")
+            exp_color = "green" if exp_val > 0 else "red"
+            hcols[0].metric("Expectancy",  f"{exp_val:+.2f}%")
+            hcols[1].metric("Avg Win",     f"{aw_val:+.2f}%")
+            hcols[2].metric("Avg Loss",    f"{al_val:+.2f}%")
+            if streak:
+                st.caption(f"Last {len(streak.replace('✅','x').replace('❌','x'))} trades: {streak}")
+
         # EQH (Equal Highs / Liquidity Ceiling) status
         if sc.eqh_level and sc.eqh_level > 0:
             eqh_icon = {
@@ -456,11 +544,33 @@ def _render_card(sc: SetupScore, idx: int, score_history: list = None) -> None:
 # Main page
 # ---------------------------------------------------------------------------
 
+def _make_pinned_entries(tickers: list[str]) -> list:
+    """Build minimal WatchlistEntry objects for pinned tickers (no watchlist data)."""
+    from side_by_side_backtest.models import WatchlistEntry, SessionType
+    entries = []
+    for t in tickers:
+        try:
+            entries.append(WatchlistEntry(
+                ticker=t,
+                post_title="📌 Pinned",
+                post_timestamp=None,
+                session_type=SessionType.MARKET_OPEN,
+                support_level=None,
+                resistance_level=None,
+                stop_level=None,
+                sentiment_notes="",
+                raw_text=f"${t}: pinned ticker",
+            ))
+        except Exception:
+            pass
+    return entries
+
+
 def main() -> None:
     st.set_page_config(page_title="Morning Brief", page_icon="📋", layout="wide")
     st.title("📋 Morning Brief — Watchlist Triage")
 
-    json_path, session_filter, post_filter, scan_interval, min_score = _sidebar()
+    json_path, session_filter, post_filter, scan_interval, min_score, pinned_tickers = _sidebar()
 
     if not Path(json_path).exists():
         st.error(f"Watchlist JSON not found: `{json_path}`")
@@ -481,6 +591,14 @@ def main() -> None:
     if session_filter:
         all_entries = [e for e in all_entries if e.session_type.value == session_filter]
 
+    # Inject pinned tickers — deduplicate against watchlist entries already present
+    if pinned_tickers:
+        existing_tickers = {e.ticker for e in all_entries}
+        pinned_entries = _make_pinned_entries(
+            [t for t in pinned_tickers if t not in existing_tickers]
+        )
+        all_entries = all_entries + pinned_entries
+
     if not all_entries:
         st.warning("No entries found for selected session.")
         return
@@ -493,7 +611,8 @@ def main() -> None:
 
     # ── Live scanner fragment — re-scores on interval, fires toast alerts ─────
     @st.fragment(run_every=scan_interval)
-    def _live_section(entries_json: str, live_refresh: bool, _min_score: float = 0.0) -> None:
+    def _live_section(entries_json: str, live_refresh: bool, _min_score: float = 0.0,
+                      _pinned: list | None = None) -> None:
         import time as _time
 
         try:
@@ -583,8 +702,10 @@ def main() -> None:
             if diff < -0.05: return f"🔴 ▼{abs(diff):.1f}"
             return "⬜ ="
 
+        _pinned_set = set(_pinned or [])
+
         rows_data = [{
-            "Ticker":  sc.ticker,
+            "Ticker":  ("📌 " + sc.ticker) if sc.ticker in _pinned_set else sc.ticker,
             "Δ":       _delta_arrow(sc.ticker),
             "Score":   sc.score,
             "Signal":  sc.signal,
@@ -644,9 +765,10 @@ def main() -> None:
         st.markdown("---")
         st.subheader("Setup Cards")
         for idx, sc in enumerate(scores_display):
-            _render_card(sc, idx, score_history=hist.get(sc.ticker, []))
+            _render_card(sc, idx, score_history=hist.get(sc.ticker, []),
+                         is_pinned=(sc.ticker in _pinned_set))
 
-    _live_section(entries_json, _live_refresh, min_score)
+    _live_section(entries_json, _live_refresh, min_score, pinned_tickers)
 
 
 if __name__ == "__main__":
