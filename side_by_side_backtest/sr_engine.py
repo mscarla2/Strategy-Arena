@@ -244,8 +244,12 @@ def _volume_profile(
     bins = np.linspace(price_min, price_max, n_bins + 1)
     bin_vol = np.zeros(n_bins)
 
-    for _, row in df.iterrows():
-        lo, hi, vol = row["low"], row["high"], row["volume"]
+    lows = df["low"].values
+    highs = df["high"].values
+    vols = df["volume"].values
+
+    for i in range(len(df)):
+        lo, hi, vol = float(lows[i]), float(highs[i]), float(vols[i])
         if vol <= 0 or lo >= hi:
             continue
         # Distribute bar's volume uniformly across its price range

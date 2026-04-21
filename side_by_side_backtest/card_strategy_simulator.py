@@ -21,13 +21,14 @@ traded every qualifying morning-brief card for the last 30 days."
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, time, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from .models import SessionType, TradeResult, WatchlistEntry
+from .sr_engine import SRLevels
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,34 @@ def _in_session(ts: pd.Timestamp, session: SessionType) -> bool:
     return t >= s or t <= e
 
 
+def _classify_session_regime(bars: pd.DataFrame, lookback_minutes: int = 60) -> str:
+    """
+    Classify the session regime as "trending" or "choppy" based on early price action.
+    Counts VWAP crossings in the first N minutes of the session.
+    """
+    if bars.empty or len(bars) < 2:
+        return "trending"
+        
+    n_bars = lookback_minutes // 5
+    early_bars = bars.iloc[:n_bars]
+    
+    if early_bars.empty:
+        return "trending"
+        
+    typical_price = (early_bars["close"] + early_bars["high"] + early_bars["low"]) / 3.0
+    pv = typical_price * early_bars["volume"]
+    cum_pv = pv.cumsum()
+    cum_vol = early_bars["volume"].cumsum()
+    vwap = cum_pv / cum_vol
+    
+    diff = early_bars["close"] - vwap
+    crossings = ((diff.shift(1) * diff) < 0).sum()
+    
+    if crossings >= 4:
+        return "choppy"
+    return "trending"
+
+
 # ---------------------------------------------------------------------------
 # Day-by-day scoring: score EACH session in the full bars history
 # ---------------------------------------------------------------------------
@@ -92,6 +121,10 @@ def _score_all_sessions(
     min_score: float,
     rescore_stride: int = 1,
     disable_sr_cache: bool = True,
+    use_atr: bool = False,
+    tp_atr_mult: float = 3.0,
+    sl_atr_mult: float = 1.5,
+    target_date: Optional[date] = None,
 ) -> List[Tuple[float, float, float, float, pd.Timestamp]]:
     """
     Replay every trading session present in *bars* and score at session open.
@@ -127,6 +160,12 @@ def _score_all_sessions(
         bars = bars.copy()
         bars.index = bars.index.tz_convert("UTC")
 
+    if use_atr:
+        from .pattern_engine import _atr
+        atr_series = _atr(bars, period=14)
+    else:
+        atr_series = pd.Series()
+
     # ── Find all unique calendar dates present in the bars ───────────────────
     # We iterate every date in the full 30-day window.  For each date we:
     #   a) Look for a "session open" bar using the session-window filter so
@@ -137,6 +176,8 @@ def _score_all_sessions(
     #   c) Score using ALL bars up to (but not including) that date's first bar
     #      — same as Morning Brief which never session-filters the scoring slice.
     all_dates = sorted({ts.date() for ts in bars.index})
+    if target_date is not None:
+        all_dates = [d for d in all_dates if d == target_date]
 
     results: List[Tuple[float, float, float, float, pd.Timestamp]] = []
 
@@ -155,6 +196,9 @@ def _score_all_sessions(
 
         if len(day_session_bars) < 2:
             continue
+            
+        regime = _classify_session_regime(day_session_bars)
+        print(f"[card_sim] {entry.ticker} {trading_date} regime: {regime}")
 
         # History before this day (no look-ahead)
         first_bar_ts = day_all_bars.index[0]
@@ -187,7 +231,7 @@ def _score_all_sessions(
         # stride=4 → every 20 min (enables re-entry detection)
         for bar_idx in range(0, len(day_session_bars), max(1, rescore_stride)):
             bar_ts    = day_session_bars.index[bar_idx]
-            intraday  = day_session_bars.iloc[:bar_idx]
+            intraday  = day_all_bars[day_all_bars.index < bar_ts]
             is_reentry = bar_idx > 0
 
             # ── Session cutoff filter ────────────────────────────────────────
@@ -206,7 +250,7 @@ def _score_all_sessions(
             # Only applies on re-entries (bar_idx > 0) — at bar 0 there are no
             # intraday bars yet so VWAP is undefined.
             entry_open = float(day_session_bars["open"].iloc[bar_idx])
-            if is_reentry and not intraday.empty and "close" in intraday.columns and "volume" in intraday.columns:
+            if not intraday.empty and "close" in intraday.columns and "volume" in intraday.columns:
                 try:
                     vol_sum = intraday["volume"].sum()
                     if vol_sum > 0:
@@ -224,7 +268,7 @@ def _score_all_sessions(
             # ── EMA deceleration filter (re-entries only) ────────────────────
             # Block re-entry when the intraday EMA(8) is falling AND still
             # accelerating downward (no sign of reversal).
-            if is_reentry and len(intraday) >= 4 and "close" in intraday.columns:
+            if len(intraday) >= 4 and "close" in intraday.columns:
                 ema8 = intraday["close"].ewm(span=8, adjust=False).mean()
                 if len(ema8) >= 3:
                     slope_now  = float(ema8.iloc[-1] - ema8.iloc[-2])
@@ -235,6 +279,16 @@ def _score_all_sessions(
                             entry.ticker, trading_date, bar_idx,
                         )
                         continue
+
+            # ── Momentum Gate (all entries) ─────────────────────────────────
+            if not intraday.empty and "close" in intraday.columns:
+                ema8 = intraday["close"].ewm(span=8, adjust=False).mean()
+                if float(day_session_bars["open"].iloc[bar_idx]) < float(ema8.iloc[-1]):
+                    logger.debug(
+                        "[card_sim] SKIP momentum gate: %s %s bar%d",
+                        entry.ticker, trading_date, bar_idx,
+                    )
+                    continue
 
             try:
                 sc = score_setup(
@@ -257,6 +311,15 @@ def _score_all_sessions(
             # ── TP: card resistance → cached day S/R (wide band) → 5% fallback
             # For first entries: always get a TP (5% fallback if S/R absent).
             # For re-entries: skip if no real resistance level found.
+            # Resolve ATR for this bar
+            if use_atr and not atr_series.empty:
+                try:
+                    current_atr = float(atr_series.loc[bar_ts])
+                except KeyError:
+                    current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
+            else:
+                current_atr = 0.0
+
             tp_price = sc.resistance if (sc.resistance and sc.resistance > entry_price) else None
             if tp_price is None and _day_sr is not None:
                 tp_candidate = _day_sr.nearest_resistance(entry_price)
@@ -270,8 +333,10 @@ def _score_all_sessions(
                     )
                     continue
                 else:
-                    # First entries: 5% fallback — never skip morning setups
-                    tp_price = entry_price * (1.0 + _DEFAULT_TP_PCT)
+                    if use_atr and current_atr > 0:
+                        tp_price = entry_price + current_atr * tp_atr_mult
+                    else:
+                        tp_price = entry_price * (1.0 + _DEFAULT_TP_PCT)
 
             # ── SL: card stop → cached day support − 2.5% SL-hunt buffer ─────
             # Use cached _day_sr (fast) rather than recomputing per bar.
@@ -279,13 +344,23 @@ def _score_all_sessions(
             if is_reentry or sl_price is None:
                 computed_support = _day_sr.nearest_support(entry_price) if _day_sr else None
                 if computed_support and 0 < computed_support < entry_price:
-                    sl_price = computed_support * (1.0 - 0.025)
+                    if use_atr and current_atr > 0:
+                        sl_price = entry_price - current_atr * sl_atr_mult
+                    else:
+                        sl_price = computed_support * (1.0 - 0.025)
                     sl_price = max(sl_price, entry_price * 0.95)
                 else:
-                    default_pct = 0.03 if is_reentry else _DEFAULT_SL_PCT
-                    sl_price = entry_price * (1.0 - default_pct)
+                    if use_atr and current_atr > 0:
+                        sl_price = entry_price - current_atr * sl_atr_mult
+                    else:
+                        default_pct = 0.03 if is_reentry else _DEFAULT_SL_PCT
+                        sl_price = entry_price * (1.0 - default_pct)
 
-            results.append((sc.score, entry_price, tp_price, sl_price, entry_ts_))
+            if regime == "choppy":
+                # Tighten stop to max 2% on choppy days
+                sl_price = max(sl_price, entry_price * 0.98)
+
+            results.append((sc.score, entry_price, tp_price, sl_price, entry_ts_, sc.sr_levels, regime))
 
     return results
 
@@ -296,8 +371,8 @@ def _score_all_sessions(
 
 # Default TP fallback when no resistance level is found in the card or S/R engine.
 # 5% matches typical small-cap intraday move targets — much more realistic than 1.5%.
-_DEFAULT_TP_PCT = 0.05   # 5%
-_DEFAULT_SL_PCT = 0.02   # 2%
+_DEFAULT_TP_PCT = 0.08   # 8%
+_DEFAULT_SL_PCT = 0.04   # 4%
 
 
 def _simulate_from_entry(
@@ -307,6 +382,8 @@ def _simulate_from_entry(
     tp_price: float,
     sl_price: float,
     entry_ts: pd.Timestamp,
+    sr_levels: Optional[SRLevels] = None,
+    regime: str = "trending",
 ) -> TradeResult:
     """
     Simulate exit from a confirmed entry using the card's own TP/SL dollar levels.
@@ -327,6 +404,15 @@ def _simulate_from_entry(
     # Derive pct equivalents for TradeResult fields (informational only)
     pt_pct = round((tp_price - entry_price) / entry_price * 100, 4) if entry_price > 0 else 0.0
     sl_pct = round((entry_price - sl_price) / entry_price * 100, 4) if entry_price > 0 else 0.0
+
+    # Calculate Linda Raschke 3/10 Oscillator (SMA based)
+    close_series = bars["close"]
+    sma3 = close_series.rolling(window=3).mean()
+    sma10 = close_series.rolling(window=10).mean()
+    macd_line = sma3 - sma10
+    signal_line = macd_line.rolling(window=16).mean()
+    macd_hist = macd_line - signal_line
+    macd_diff = macd_hist.diff()
 
     # ── Bug #3 fix: constrain exit scan to same calendar day + same session ──
     # The entry_ts is UTC-aware; derive the calendar date (UTC) once.
@@ -397,10 +483,37 @@ def _simulate_from_entry(
             entry_attempt=1,
         )
 
+    highest_high = entry_price
+    trail_active = False
+    trail_activation_pct = 2.0
+    trailing_stop_pct = 1.0
+
     for i, (ts, bar) in enumerate(post_bars.iterrows()):
         high  = float(bar.get("high",  bar.get("close", entry_price)))
         low   = float(bar.get("low",   bar.get("close", entry_price)))
         close = float(bar.get("close", entry_price))
+
+        # Check MACD momentum (Linda Raschke 3/10)
+        last_diffs = macd_diff.loc[:ts].iloc[-3:]
+        if len(last_diffs) >= 3 and (last_diffs < 0).all():
+            # Momentum weakening! Tighten stop to max 1% below highest_high
+            trail_stop = highest_high * 0.99
+            if trail_stop > sl_price:
+                sl_price = trail_stop
+                
+            # Tighten TP if position is in profit
+            if close > entry_price:
+                tp_price = min(tp_price, close * 1.005)
+
+        if high > highest_high:
+            highest_high = high
+            if not trail_active and (highest_high - entry_price) / entry_price * 100 >= trail_activation_pct:
+                trail_active = True
+                
+        if trail_active:
+            trail_stop = highest_high * (1 - trailing_stop_pct / 100)
+            if low <= trail_stop:
+                return _mk_result(ts, trail_stop, "win", i + 1)
 
         if low <= sl_price:
             raw_fill   = min(sl_price, low)
@@ -408,10 +521,19 @@ def _simulate_from_entry(
             return _mk_result(ts, fill_price, "loss", i + 1)
 
         if high >= tp_price:
-            return _mk_result(ts, tp_price, "win", i + 1)
+            if regime == "choppy":
+                return _mk_result(ts, tp_price, "win", i + 1)
+            else:
+                trail_active = True
 
         if _bar_time_utc(ts) >= close_time:
             return _mk_result(ts, close, "timeout", i + 1)
+
+        # Stall Exit: exit if trade is underwater after 30 minutes (6 bars)
+        if i >= 5 and close < entry_price:
+            return _mk_result(ts, close, "loss", i + 1)
+        if i >= 5 and close < entry_price:
+            return _mk_result(ts, close, "loss", i + 1)
 
     # End of same-session bars for this day — time-stop at last available bar.
     if not post_bars.empty:
@@ -444,6 +566,29 @@ def _simulate_from_entry(
     )
 
 
+def _score_ticker_top(
+    entry: WatchlistEntry,
+    bars: Optional[pd.DataFrame],
+    min_score: float,
+    rescore_stride: int,
+    disable_sr_cache: bool,
+    use_atr: bool,
+    tp_atr_mult: float,
+    sl_atr_mult: float,
+    target_date: Optional[date] = None,
+) -> List[Tuple[WatchlistEntry, float, float, float, float, pd.Timestamp, Optional[SRLevels], str]]:
+    if bars is None or bars.empty:
+        return []
+    sessions = _score_all_sessions(entry, bars, min_score,
+                                   rescore_stride=rescore_stride,
+                                   disable_sr_cache=disable_sr_cache,
+                                   use_atr=use_atr,
+                                   tp_atr_mult=tp_atr_mult,
+                                   sl_atr_mult=sl_atr_mult,
+                                   target_date=target_date)
+    return [(entry, sc, ep, tp, sl, ets, srl, reg) for sc, ep, tp, sl, ets, srl, reg in sessions]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -464,6 +609,10 @@ def simulate_card_strategy(
     reentry_min_score: float | None = None,   # None = min_score + 0.5
     rescore_stride: int = 4,   # bars between re-scores; 1 = session open only (fast)
     disable_sr_cache: bool = True,   # False = reuse S/R cache across days (faster batch)
+    use_atr: bool = False,
+    tp_atr_mult: float = 3.0,
+    sl_atr_mult: float = 1.5,
+    target_date: Optional[date] = None,
 ) -> List[TradeResult]:
     """
     Replay the card strategy across the FULL historical bars window.
@@ -508,18 +657,23 @@ def simulate_card_strategy(
         # Each worker returns a list of (entry, score, ep, tp, sl, ets) tuples.
         all_candidates: List[Tuple[WatchlistEntry, float, float, float, float, pd.Timestamp]] = []
 
-        def _score_ticker(entry: WatchlistEntry):
-            bars = bars_map.get(entry.ticker)
-            if bars is None or bars.empty:
-                return []
-            sessions = _score_all_sessions(entry, bars, min_score,
-                                           rescore_stride=rescore_stride,
-                                           disable_sr_cache=disable_sr_cache)
-            return [(entry, sc, ep, tp, sl, ets) for sc, ep, tp, sl, ets in sessions]
-
         n_workers = min(max_workers, max(1, len(unique_entries)))
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futs = {pool.submit(_score_ticker, e): e for e in unique_entries}
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futs = {
+                pool.submit(
+                    _score_ticker_top,
+                    e,
+                    bars_map.get(e.ticker),
+                    min_score,
+                    rescore_stride,
+                    disable_sr_cache,
+                    use_atr,
+                    tp_atr_mult,
+                    sl_atr_mult,
+                    target_date,
+                ): e
+                for e in unique_entries
+            }
             for fut in as_completed(futs):
                 try:
                     results = fut.result()
@@ -553,7 +707,7 @@ def simulate_card_strategy(
         banned_same_day: dict = {}        # {(ticker, date): True} — tickers banned after a loss
 
         _dbg_n = 0   # count candidates examined for first-pass debug
-        for entry, score, ep, tp, sl, ets in all_candidates:
+        for entry, score, ep, tp, sl, ets, sr_levels, regime in all_candidates:
             dedup_key = (entry.ticker, str(ets))
             if dedup_key in seen_dedup:
                 continue
@@ -640,7 +794,7 @@ def simulate_card_strategy(
 
             # ── Simulate exit ─────────────────────────────────────────────────
             try:
-                trade = _simulate_from_entry(entry, bars, ep, tp, sl, ets)
+                trade = _simulate_from_entry(entry, bars, ep, tp, sl, ets, sr_levels, regime)
             except Exception as exc:
                 logger.warning("[card_sim] SKIP exit-error %s ets=%s: %s",
                                 entry.ticker, ets, exc)
@@ -648,7 +802,10 @@ def simulate_card_strategy(
                 continue
 
             # ── Dollar PnL and position tracking ─────────────────────────────
-            shares = trade_size / ep if ep > 0 else 0.0
+            # Score-driven position sizing
+            dynamic_trade_size = trade_size + 200 * (score - 4.3)
+            dynamic_trade_size = max(100.0, min(1000.0, dynamic_trade_size))
+            shares = dynamic_trade_size / ep if ep > 0 else 0.0
             dollar_pnl = shares * (trade.exit_price - ep)
             daily_pnl[trade_date] = daily_pnl.get(trade_date, 0.0) + dollar_pnl
 

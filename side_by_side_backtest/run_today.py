@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_today.py — "How would I have done today with the card strategy?"
+run_today.py — "How would I have done today with the X strategy?"
 
 Loads today's watchlist posts (all sessions), fetches 30-day 5-min bars for every
 ticker, then runs simulate_card_strategy() across the full bar history — scoring
@@ -118,6 +118,30 @@ def _pick_posts(
         if not keywords or any(kw in title for kw in keywords):
             matched.append(p)
 
+    # Fallback: use the most recent day's posts if target_date has none
+    if not matched:
+        all_dates = []
+        for p in posts:
+            ts_raw = p.get("timestamp", "")
+            try:
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                all_dates.append(ts.astimezone(_ET).date())
+            except Exception:
+                continue
+        if all_dates:
+            latest_date = max(all_dates)
+            print(f"  {_Y}[warn]{_RST} No posts for {target_date} — falling back to latest date: {latest_date}")
+            for p in posts:
+                ts_raw = p.get("timestamp", "")
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if ts.astimezone(_ET).date() == latest_date:
+                        title = p.get("title", "").upper()
+                        if not keywords or any(kw in title for kw in keywords):
+                            matched.append(p)
+                except Exception:
+                    continue
+
     return matched
 
 
@@ -233,18 +257,38 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
     # SBS:  Per-day calls — SBS uses support levels from each day's specific post,
     #       so mixing tickers across posts would give wrong support levels.
     if args.mode == "card":
-        all_trades = simulate_card_strategy(
-            unique, bars_map,
-            min_score=args.min,
-            budget_total=args.budget,
-            trade_size=args.size,
-            max_concurrent=max_conc,
-            daily_loss_halt=args.halt,
-            max_workers=args.workers,
-            verbose=True,
-            rescore_stride=1,
-            disable_sr_cache=False,
-        )
+        all_trades = []
+        for sim_date in all_dates:
+            day_matched = _pick_posts(posts, "unknown", sim_date)
+            if not day_matched:
+                continue
+            day_entries: list = []
+            for p in day_matched:
+                day_entries.extend(parse_watchlist_post(RawWatchlist(**p)))
+            day_seen: set[str] = set()
+            day_unique: list = []
+            for e in day_entries:
+                if e.ticker != "SPY" and e.ticker not in day_seen and not is_banned(e.ticker):
+                    day_seen.add(e.ticker); day_unique.append(e)
+            day_bars = {e.ticker: bars_map[e.ticker]
+                        for e in day_unique if e.ticker in bars_map}
+            if not day_bars:
+                continue
+            day_trades = simulate_card_strategy(
+                day_unique, day_bars,
+                min_score=args.min,
+                budget_total=args.budget,
+                trade_size=args.size,
+                max_concurrent=max_conc,
+                daily_loss_halt=args.halt,
+                max_workers=args.workers,
+                verbose=False,
+                rescore_stride=1,
+                disable_sr_cache=False,
+                use_atr=args.use_atr,
+                target_date=sim_date,
+            )
+            all_trades.extend(day_trades)
     else:
         # SBS per-day: entries and support levels are date-specific
         from side_by_side_backtest.simulator import simulate_all as _sim_all
@@ -272,6 +316,7 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
                 max_entry_attempts=10,
                 require_support_ok=True,
                 verbose=False,
+                use_atr=args.use_atr,
             )
             all_trades.extend(day_trades)
 
@@ -340,9 +385,9 @@ def main() -> None:
                     help="[sbs] Take-profit %% (default 5.0)")
     ap.add_argument("--sl",       type=float, default=1.0,
                     help="[sbs] Stop-loss %% (default 1.0)")
-    ap.add_argument("--session",  default="market_open",
+    ap.add_argument("--session",  default="unknown",
                     choices=["market_open", "pre_market", "after_hours", "unknown"],
-                    help="Which session post to load (default: market_open)")
+                    help="Which session post to load (default: unknown)")
     ap.add_argument("--date",     default=None,
                     help="YYYY-MM-DD of the post (default: today ET)")
     ap.add_argument("--no-fetch", action="store_true",
@@ -357,6 +402,8 @@ def main() -> None:
                     help="Daily loss halt $ (default 300)")
     ap.add_argument("--all",      action="store_true",
                     help="Run simulation for every post date in the JSON")
+    ap.add_argument("--use-atr", action="store_true",
+                    help="Use ATR-based TP/SL instead of percentages/card levels")
     args = ap.parse_args()
 
     target_date: date | None = None
@@ -377,7 +424,7 @@ def main() -> None:
         return
 
     # ── 1. Find today's post ──────────────────────────────────────────────────
-    matched = _pick_posts(posts, "unknown" if args.mode == "sbs" else args.session, target_date)
+    matched = _pick_posts(posts, args.session, target_date)
 
     if not matched:
         date_str = str(target_date or datetime.now(tz=_ET).date())
@@ -468,8 +515,10 @@ def main() -> None:
             daily_loss_halt=args.halt,
             max_workers=args.workers,
             verbose=True,
-            rescore_stride=4,
+            rescore_stride=1,
             disable_sr_cache=False,
+            use_atr=args.use_atr,
+            target_date=sim_date,
         )
         trades = [t for t in all_trades if _trade_date(t) == sim_date]
         if not trades:
@@ -491,7 +540,8 @@ def main() -> None:
             stop_loss_pct=args.sl,
             max_entry_attempts=10,
             require_support_ok=True,
-            verbose=False,
+            verbose=True,
+            use_atr=args.use_atr,
         )
         trades = [t for t in all_trades if _trade_date(t) == sim_date]
         if not trades:

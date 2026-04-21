@@ -24,6 +24,7 @@ from typing import Optional
 import time as _time
 
 import pandas as pd
+from .sr_engine import SRLevels
 
 # ---------------------------------------------------------------------------
 # Performance constants
@@ -72,6 +73,7 @@ class SetupScore:
     rsi_div_score:      float = 0.0   # 0 = none, 1 = partial, 2 = confirmed divergence
     regime_score:       float = 0.0   # 0 = counter-trend, 1 = flat, 2 = aligned down
     eqh_score:          float = 0.0   # 0 = no EQH pair, 1 = pair found nearby, 2 = approaching/signal fired
+    sr_levels:          Optional[SRLevels] = None
 
     # Raw data for the card display
     entry_price:      float = 0.0
@@ -801,6 +803,7 @@ def score_setup(
     _RELEVANCE_GATE = 0.15   # 15% — matches simulator stale-support exclusion
     _resistance_stale = _is_stale(resistance, current_price, threshold=_RELEVANCE_GATE)
     _support_stale    = _is_stale(support,    current_price, threshold=_RELEVANCE_GATE)
+    sr = None
 
     if not bars.empty and (_support_stale or _resistance_stale):
         now_t2 = _time.monotonic()
@@ -950,9 +953,17 @@ def score_setup(
     eqh_s,   eqh_lvl, eqh_sig      = _score_eqh(sb, current_price)
 
     # Max score is now 24 (12 components × 2); normalise to 0–10
-    raw_total = (pat_s + adx_s + rr_s + conf_s + hist_s + rr_rev_s
-                 + rej_s + rv_s + macd_s + rsi_s + regime_s + eqh_s)
-    total     = round(raw_total / 24.0 * 10.0, 2)
+    # New Formula: Base * PA_Mult * Conviction
+    Base = adx_s + macd_s + regime_s
+    PA_Mult = 1.0 + (pat_s * 0.1) + (conf_s * 0.1) + (rr_rev_s * 0.1) + (rej_s * 0.05) + (eqh_s * 0.1) + (rsi_s * 0.05)
+    Conviction = 1.0 + (rv_s * 0.1) + (hist_s * 0.1)
+    
+    raw_total = Base * PA_Mult * Conviction
+    
+    if eqh_s > 0 and conf_s > 0 and rr_rev_s > 0:
+        raw_total *= 1.5
+        
+    total = round(raw_total / 16.8 * 10.0, 2)
 
     sig = "🟢 STRONG" if total >= 7.0 else ("🟡 WATCH" if total >= 4.0 else "🔴 SKIP")
 
@@ -976,6 +987,7 @@ def score_setup(
         rsi_div_score=rsi_s,
         regime_score=regime_s,
         eqh_score=eqh_s,
+        sr_levels=sr,
         entry_price=round(entry_price, 4),
         support=round(support, 4) if support else 0.0,
         resistance=round(resistance, 4) if resistance else None,

@@ -143,7 +143,12 @@ def _resolve_support(
     support = entry.support_level
     ticker  = entry.ticker
 
-    current_price = float(bars["close"].iloc[-1]) if not bars.empty else 0.0
+    if entry.post_timestamp is not None:
+        historical_bars = bars[bars.index < entry.post_timestamp]
+    else:
+        historical_bars = bars
+
+    current_price = float(historical_bars["close"].iloc[-1]) if not historical_bars.empty else 0.0
 
     def _level_stale(level: Optional[float], price: float, threshold: float = 0.10) -> bool:
         if not level or level <= 0 or price <= 0:
@@ -154,7 +159,7 @@ def _resolve_support(
         return support, "watchlist"
 
     from .sr_engine import compute_sr_levels
-    sr = compute_sr_levels(bars, current_price=current_price, price_range_pct=0.10)
+    sr = compute_sr_levels(historical_bars, current_price=current_price, price_range_pct=0.10)
     computed = sr.nearest_support(current_price)
     if computed:
         if not silent:
@@ -225,13 +230,16 @@ def simulate_entry(
     stop_loss_pct: float = 1.0,
     max_loss_pct: float = 5.0,
     pattern_tolerance_pct: float = 0.01,
-    pattern_lookback: int = 5,
+    pattern_lookback: int = 20,
     strict_pattern_proximity: bool = False,
     pattern_proximity_pct: float = 0.005,
     trailing_stop_pct: Optional[float] = None,
     trail_activation_pct: float = 1.0,
     max_entry_attempts: int = 10,
     eqh_breakout_mode: bool = False,
+    use_atr: bool = False,
+    tp_atr_mult: float = 3.0,
+    sl_atr_mult: float = 1.5,
     # ── Performance: pre-computed caches (passed by simulate_all) ────────────
     precomputed_support: Optional[float] = None,
     precomputed_support_source: Optional[str] = None,
@@ -284,6 +292,13 @@ def simulate_entry(
 
     session = entry.session_type
     ticker  = entry.ticker
+
+    # ── ATR Calculation ───────────────────────────────────────────────────────
+    if use_atr:
+        from .pattern_engine import _atr
+        atr_series = _atr(bars, period=14)
+    else:
+        atr_series = pd.Series()
 
     # ── S/R resolution — use pre-computed if available (fast path) ────────────
     if precomputed_support is not None:
@@ -339,9 +354,14 @@ def simulate_entry(
     cooldown_until = 0         # Fix 4: bar index below which re-entry is blocked
     i = 0                      # current bar index; advanced manually
 
+    # Hoist columns to Numpy arrays for speed
+    opens = bars["open"].values
+    highs = bars["high"].values
+    lows = bars["low"].values
+    closes = bars["close"].values
+
     while i < len(bars):
         ts  = bars.index[i]
-        row = bars.iloc[i]
 
         # ---- Time-stop gate ----
         if _after_session_close(ts, session):
@@ -358,8 +378,8 @@ def simulate_entry(
 
         # ---- Phase A: Scan for support touch (BODY-based, not wick) ----
         if not waiting_for_close:
-            body_low = min(float(row["open"]), float(row["close"]))
-            if body_low <= support * 1.005:
+            body_low = min(float(opens[i]), float(closes[i]))
+            if body_low <= support * 1.02:
                 waiting_for_close = True
                 touch_bar_idx = i
                 entry_attempt += 1
@@ -367,12 +387,7 @@ def simulate_entry(
             continue
 
         # ---- Phase B: Wait for bar CLOSE ----
-        # Allow close up to 3% below support — micro-cap stocks routinely close
-        # slightly below a computed support level (which sits mid-zone) before
-        # bouncing. Analysis showed 94% of touches close below at 0.2% tolerance;
-        # 3% recovers the legitimate support-zone traders without letting in
-        # tickers where support is genuinely broken.
-        if row["close"] < support * 0.97:
+        if float(closes[i]) < support * 0.90:
             waiting_for_close = False
             touch_bar_idx = None
             i += 1
@@ -398,7 +413,7 @@ def simulate_entry(
         if _after_session_close(next_ts, session):
             break
 
-        entry_price = float(bars.iloc[next_idx]["open"])
+        entry_price = float(opens[next_idx])
         if entry_price <= 0:
             break
 
@@ -439,7 +454,19 @@ def simulate_entry(
         # TP: use watchlist resistance level when available and > entry_price.
         # Fix 5: cap resistance-level override at 1.5× the configured profit target
         #        so trades don't stay open chasing an unreachable level.
-        configured_tp = entry_price * (1 + profit_target_pct / 100)
+        if use_atr and not atr_series.empty:
+            # Find ATR for the current bar timestamp
+            try:
+                current_atr = float(atr_series.loc[ts])
+            except KeyError:
+                current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
+            
+            configured_tp = entry_price + current_atr * tp_atr_mult
+            configured_stop = entry_price - current_atr * sl_atr_mult
+        else:
+            configured_tp = entry_price * (1 + profit_target_pct / 100)
+            configured_stop = entry_price * (1 - stop_loss_pct / 100)
+
         resistance_level = entry.resistance_level if entry.resistance_level else None
         if resistance_level and resistance_level > entry_price * 1.005:
             take_profit = min(float(resistance_level), configured_tp * 1.5)
@@ -448,7 +475,6 @@ def simulate_entry(
 
         # Fix 2c: SL is a hard ceiling — support can only tighten, never widen it.
         # Tighten to support * 0.999 only when that level is ABOVE the configured SL.
-        configured_stop = entry_price * (1 - stop_loss_pct / 100)
         support_stop    = support * 0.999
         stop_price = max(configured_stop, support_stop) if support_stop > configured_stop else configured_stop
 
@@ -469,7 +495,6 @@ def simulate_entry(
 
         for j in range(next_idx + 1, len(bars)):
             fwd_ts  = bars.index[j]
-            fwd_row = bars.iloc[j]
             hold_bars += 1
             exit_bar_idx = j
 
@@ -477,11 +502,11 @@ def simulate_entry(
                 # Use CLOSE (not LOW) to distinguish real breakdowns from wick hunts.
                 # Micro-cap stocks routinely wick 0.5–1% below support then close above —
                 # only a BAR CLOSE below support * 0.99 signals genuine level failure.
-                if fwd_row["close"] < support * 0.99:
+                if float(closes[j]) < support * 0.99:
                     support_respected = False
 
             if trailing_stop_pct is not None:
-                bar_high = float(fwd_row["high"])
+                bar_high = float(highs[j])
                 if bar_high > highest_high:
                     highest_high = bar_high
                 if not trail_active:
@@ -499,22 +524,22 @@ def simulate_entry(
             # captured even on the first bar after session close.
 
             # Fix 3: Hard max-loss cap — checked first (widest protection net)
-            if fwd_row["low"] <= hard_loss_floor:
+            if float(lows[j]) <= hard_loss_floor:
                 outcome    = "loss"
                 # Exit at the worse of: actual open (gap) or the floor price
-                exit_price = min(float(fwd_row["open"]), hard_loss_floor)
+                exit_price = min(float(opens[j]), hard_loss_floor)
                 exit_ts    = fwd_ts
                 break
 
             # Fix 4: Take-profit — intrabar high touches TP
-            if fwd_row["high"] >= take_profit:
+            if float(highs[j]) >= take_profit:
                 outcome    = "win"
                 exit_price = take_profit
                 exit_ts    = fwd_ts
                 break
 
             # Fix 1: Regular SL / trailing-stop — intrabar low touches stop
-            if fwd_row["low"] <= effective_stop:
+            if float(lows[j]) <= effective_stop:
                 outcome    = "win" if effective_stop > entry_price else "loss"
                 exit_price = effective_stop
                 exit_ts    = fwd_ts
@@ -523,13 +548,13 @@ def simulate_entry(
             # Session-close timeout — only fires if neither TP nor SL was hit
             if _after_session_close(fwd_ts, session):
                 outcome    = "timeout"
-                exit_price = float(fwd_row["close"])
+                exit_price = float(closes[j])
                 exit_ts    = fwd_ts
                 break
 
             if j == len(bars) - 1:
                 outcome    = "timeout"
-                exit_price = float(fwd_row["close"])
+                exit_price = float(closes[j])
                 exit_ts    = fwd_ts
 
         if exit_price is None:
@@ -815,36 +840,55 @@ def build_simulation_caches(
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from .sr_engine import compute_sr_levels
 
-    # Group watchlist support levels by ticker for fast lookup
-    wl_supports: dict[str, list[Optional[float]]] = {}
+    # Group watchlist support levels by (ticker, date) for fast lookup
+    wl_supports: dict[tuple, list[Optional[float]]] = {}
+    unique_pairs = set()
     for e in entries:
-        wl_supports.setdefault(e.ticker, []).append(e.support_level)
+        if e.post_timestamp is not None:
+            d = e.post_timestamp.date()
+            wl_supports.setdefault((e.ticker, d), []).append(e.support_level)
+            if e.ticker in bars_map and not bars_map[e.ticker].empty:
+                unique_pairs.add((e.ticker, d))
 
-    unique_tickers = [t for t in bars_map if not bars_map[t].empty]
     if verbose:
-        print(f"[sim_cache] Building caches for {len(unique_tickers)} tickers "
+        print(f"[sim_cache] Building caches for {len(unique_pairs)} ticker-date pairs "
               f"(workers={max_workers}) …")
 
-    def _build_one(ticker: str):
+    def _build_one(pair):
+        ticker, target_date = pair
         tbars = bars_map[ticker]
-        current_price = float(tbars["close"].iloc[-1])
+        
+        if tbars.index.tzinfo is None:
+            tbars_tz = tbars.copy()
+            tbars_tz.index = tbars_tz.index.tz_localize("UTC")
+        else:
+            tbars_tz = tbars
+
+        day_bars = tbars_tz[tbars_tz.index.date == target_date]
+        if not day_bars.empty:
+            first_bar_ts = day_bars.index[0]
+            historical_bars = tbars_tz[tbars_tz.index < first_bar_ts]
+        else:
+            ts_start = pd.Timestamp(target_date, tz="UTC")
+            historical_bars = tbars_tz[tbars_tz.index < ts_start]
+
+        current_price = float(historical_bars["close"].iloc[-1]) if not historical_bars.empty else 0.0
 
         def _stale(level, price, thr=0.10):
             if not level or level <= 0 or price <= 0:
                 return True
             return abs(level - price) / price > thr
 
-        # Prefer a valid watchlist level
         sup: Optional[float] = None
         src: str = "computed"
-        for wl_level in wl_supports.get(ticker, []):
+        for wl_level in wl_supports.get((ticker, target_date), []):
             if not _stale(wl_level, current_price):
                 sup = wl_level
                 src = "watchlist"
                 break
 
-        if sup is None:
-            sr = compute_sr_levels(tbars, current_price=current_price, price_range_pct=0.10)
+        if sup is None and not historical_bars.empty:
+            sr = compute_sr_levels(historical_bars, current_price=current_price, price_range_pct=0.10)
             computed = sr.nearest_support(current_price)
             if computed:
                 sup = computed
@@ -860,19 +904,19 @@ def build_simulation_caches(
                 pattern_proximity_pct=pattern_proximity_pct,
             )
 
-        return ticker, sup, src, pat_map, pat_idx
+        return ticker, target_date, sup, src, pat_map, pat_idx
 
-    support_cache: dict[str, Tuple[Optional[float], str]] = {}
-    pattern_cache: dict[str, Tuple[dict, set]]            = {}
+    support_cache: dict[tuple, Tuple[Optional[float], str]] = {}
+    pattern_cache: dict[tuple, Tuple[dict, set]]            = {}
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(unique_tickers))) as pool:
-        futs = {pool.submit(_build_one, t): t for t in unique_tickers}
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(unique_pairs) if unique_pairs else 1)) as pool:
+        futs = {pool.submit(_build_one, p): p for p in unique_pairs}
         for fut in as_completed(futs):
             try:
-                ticker, sup, src, pat_map, pat_idx = fut.result()
-                support_cache[ticker] = (sup, src)
+                ticker, target_date, sup, src, pat_map, pat_idx = fut.result()
+                support_cache[(ticker, target_date)] = (sup, src)
                 if pat_map:
-                    pattern_cache[ticker] = (pat_map, pat_idx)
+                    pattern_cache[(ticker, target_date)] = (pat_map, pat_idx)
             except Exception as exc:
                 print(f"[sim_cache] WARNING: {futs[fut]}: {exc}")
 
@@ -937,6 +981,48 @@ def _fetch_spy_benchmark(start_date: str, end_date: str) -> Optional[float]:
         return None
 
 
+def _simulate_one_entry(
+    entry: WatchlistEntry,
+    bars: Optional[pd.DataFrame],
+    profit_target_pct: float,
+    stop_loss_pct: float,
+    max_loss_pct: float,
+    pattern_tolerance_pct: float,
+    strict_pattern_proximity: bool,
+    pattern_proximity_pct: float,
+    max_entry_attempts: int,
+    eqh_breakout_mode: bool,
+    use_atr: bool,
+    tp_atr_mult: float,
+    sl_atr_mult: float,
+    entry_support: Optional[float],
+    entry_src: str,
+    pat_map: dict,
+    pat_idx: set,
+) -> List[TradeResult]:
+    if bars is None or bars.empty:
+        return []
+    from .simulator import simulate_entry
+    return simulate_entry(
+        entry, bars,
+        profit_target_pct=profit_target_pct,
+        stop_loss_pct=stop_loss_pct,
+        max_loss_pct=max_loss_pct,
+        pattern_tolerance_pct=pattern_tolerance_pct,
+        strict_pattern_proximity=strict_pattern_proximity,
+        pattern_proximity_pct=pattern_proximity_pct,
+        max_entry_attempts=max_entry_attempts,
+        eqh_breakout_mode=eqh_breakout_mode,
+        use_atr=use_atr,
+        tp_atr_mult=tp_atr_mult,
+        sl_atr_mult=sl_atr_mult,
+        precomputed_support=entry_support,
+        precomputed_support_source=entry_src,
+        precomputed_pattern_map=pat_map,
+        precomputed_pattern_indices=pat_idx,
+    )
+
+
 def simulate_all(
     entries: List[WatchlistEntry],
     bars_map: dict,   # {ticker: pd.DataFrame}
@@ -952,6 +1038,9 @@ def simulate_all(
     log_path: Optional[str] = None,
     caches: Optional["SimulationCaches"] = None,
     eqh_breakout_mode: bool = False,
+    use_atr: bool = False,
+    tp_atr_mult: float = 3.0,
+    sl_atr_mult: float = 1.5,
 ) -> List[TradeResult]:
     """
     Run simulate_entry for every watchlist entry that has OHLCV data available.
@@ -1041,74 +1130,89 @@ def simulate_all(
     # Feature A: compounded cumulative PnL multiplier
     cum_multiplier: float = 1.0
 
-    for entry in entries:
-        bars = bars_map.get(entry.ticker)
-        if bars is None or bars.empty:
+    all_trade_lists = []
+    # Use ProcessPoolExecutor to parallelize simulation across entries
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    with ProcessPoolExecutor() as pool:
+        futs = {}
+        for entry in entries:
+            ticker = entry.ticker
+            entry_date = entry.post_timestamp.date() if entry.post_timestamp else None
+            if entry_date:
+                entry_support, entry_src = _support_cache.get((ticker, entry_date), (None, "computed"))
+                pat_map, pat_idx = _pattern_cache.get((ticker, entry_date), ({}, set()))
+            else:
+                entry_support, entry_src = None, "computed"
+                pat_map, pat_idx = {}, set()
+                
+            futs[pool.submit(
+                _simulate_one_entry,
+                entry,
+                bars_map.get(ticker),
+                profit_target_pct,
+                stop_loss_pct,
+                max_loss_pct,
+                pattern_tolerance_pct,
+                strict_pattern_proximity,
+                pattern_proximity_pct,
+                max_entry_attempts,
+                eqh_breakout_mode,
+                use_atr,
+                tp_atr_mult,
+                sl_atr_mult,
+                entry_support,
+                entry_src,
+                pat_map,
+                pat_idx,
+            )] = entry
+
+        for fut in as_completed(futs):
+            entry = futs[fut]
+            try:
+                trade_list = fut.result()
+                if trade_list:
+                    all_trade_lists.extend(trade_list)
+                else:
+                    _log(f"  [NO_ENTRY] {entry.ticker:6s} — no trigger found")
+            except Exception as exc:
+                _log(f"  [ERROR] {entry.ticker} simulation failed: {exc}")
+
+    # Sort trades chronologically for consistent PnL compounding and logging
+    all_trade_lists.sort(key=lambda t: t.entry_ts)
+
+    for result in all_trade_lists:
+        dedup_key = (result.ticker, result.entry_ts)
+        if dedup_key in seen_entries:
             skipped += 1
             continue
+        seen_entries.add(dedup_key)
 
-        # Use pre-computed support and patterns for this ticker
-        ticker = entry.ticker
-        entry_support, entry_src = _support_cache.get(ticker, (None, "computed"))
-        pat_map, pat_idx = _pattern_cache.get(ticker, ({}, set()))
-
-        trade_list = simulate_entry(
-            entry, bars,
-            profit_target_pct=profit_target_pct,
-            stop_loss_pct=stop_loss_pct,
-            max_loss_pct=max_loss_pct,
-            pattern_tolerance_pct=pattern_tolerance_pct,
-            strict_pattern_proximity=strict_pattern_proximity,
-            pattern_proximity_pct=pattern_proximity_pct,
-            max_entry_attempts=max_entry_attempts,
-            eqh_breakout_mode=eqh_breakout_mode,
-            precomputed_support=entry_support,
-            precomputed_support_source=entry_src,
-            precomputed_pattern_map=pat_map,
-            precomputed_pattern_indices=pat_idx,
-        )
-
-        if not trade_list:
-            _log(f"  [NO_ENTRY] {entry.ticker:6s} — no trigger found")
-            continue
-
-        for result in trade_list:
-            dedup_key = (result.ticker, result.entry_ts)
-            if dedup_key in seen_entries:
-                skipped += 1
-                continue
-            seen_entries.add(dedup_key)
-
-            # Fix 5: filter out computed-source trades where support was not respected
-            # Fix 1: filter ALL sources (not just computed) when support not respected
-            if (require_support_ok
-                    and not result.support_respected):
-                filtered += 1
-                _log(
-                    f"  [FILTERED] {result.ticker:6s} "
-                    f"attempt={result.entry_attempt}  "
-                    f"src={result.support_source}  "
-                    f"support_ok=False — skipped (--require-support-ok)"
-                )
-                continue
-
-            # Feature A: update compounded cumulative PnL
-            cum_multiplier *= (1 + result.pnl_pct / 100)
-            cum_pnl_pct = (cum_multiplier - 1) * 100
-
-            results.append(result)
+        if require_support_ok and not result.support_respected:
+            filtered += 1
             _log(
-                f"  [{result.outcome.upper():7s}] {result.ticker:6s} "
+                f"  [FILTERED] {result.ticker:6s} "
                 f"attempt={result.entry_attempt}  "
                 f"src={result.support_source}  "
-                f"pat={result.pattern_type}(+{result.bars_since_pattern}b)  "
-                f"entry={result.entry_price:.4f}  "
-                f"exit={result.exit_price:.4f}  "
-                f"pnl={result.pnl_pct:+.2f}%  "
-                f"bars={result.hold_bars}  "
-                f"support_ok={result.support_respected}  "
-                f"cum={cum_pnl_pct:+.2f}%"
+                f"support_ok=False — skipped (--require-support-ok)"
             )
+            continue
+
+        cum_multiplier *= (1 + result.pnl_pct / 100)
+        cum_pnl_pct = (cum_multiplier - 1) * 100
+
+        results.append(result)
+        _log(
+            f"  [{result.outcome.upper():7s}] {result.ticker:6s} "
+            f"attempt={result.entry_attempt}  "
+            f"src={result.support_source}  "
+            f"pat={result.pattern_type}(+{result.bars_since_pattern}b)  "
+            f"entry={result.entry_price:.4f}  "
+            f"exit={result.exit_price:.4f}  "
+            f"pnl={result.pnl_pct:+.2f}%  "
+            f"bars={result.hold_bars}  "
+            f"support_ok={result.support_respected}  "
+            f"cum={cum_pnl_pct:+.2f}%"
+        )
 
     # Feature A: final cumulative PnL
     final_cum_pnl = (cum_multiplier - 1) * 100

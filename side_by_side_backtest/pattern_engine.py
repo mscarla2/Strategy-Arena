@@ -86,6 +86,13 @@ def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return adx
 
 
+def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Wilder's Average True Range."""
+    tr = _true_range(df)
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
+    return atr
+
+
 def _in_uptrend(closes: pd.Series, highs: pd.Series, idx: int, period: int = 6) -> bool:
     """
     Intraday uptrend: current close is above the lowest close in the last

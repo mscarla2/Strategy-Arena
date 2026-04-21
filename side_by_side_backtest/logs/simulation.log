@@ -10472,3 +10472,65 @@
 2026-04-21 09:00:37    [NO_ENTRY] GMEX   — no trigger found
 2026-04-21 09:00:37  [simulator] END — 144 trades / 1468 entries (153 skipped/deduped, 125 filtered)  cum_pnl=+438.08%  spy_bh=+2.10%  (2026-02-08 → 2026-04-22)
 2026-04-21 09:00:37  [simulator] Log written → /Users/me/Developer/Strategy Arena/side_by_side_backtest/logs/simulation.log
+2026-04-21 21:54:36  [simulator] START — 14 entries  TP=5.0%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-21 21:54:36    [NO_ENTRY] UGRO   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] BIAF   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] PTLE   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] ASNS   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] ARTL   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] GMEX   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] MGRX   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] TOVX   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] AGRZ   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] RPGL   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] IBRX   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] WGRX   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] LNAI   — no trigger found
+2026-04-21 21:54:36    [NO_ENTRY] UPS    — no trigger found
+2026-04-21 21:54:36  [simulator] END — 0 trades / 14 entries (0 skipped/deduped, 0 filtered)  cum_pnl=+0.00%  spy_bh=-3.25%  (2026-03-23 → 2026-03-24)
+2026-04-21 21:54:36  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-21 22:04:18  [simulator] START — 17 entries  TP=5.0%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-21 22:04:40    [NO_ENTRY] IMMP   — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] NCI    — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] BIRD   — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] AGAE   — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] VSA    — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] RMSG   — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] JTAI   — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] LIMN   — no trigger found
+2026-04-21 22:04:40    [NO_ENTRY] SNAL   — no trigger found
+2026-04-21 22:04:40    [FILTERED] ARAI   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ARAI   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [LOSS   ] ARAI   attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.1998  exit=1.1988  pnl=-0.08%  bars=1  support_ok=True  cum=-0.08%
+2026-04-21 22:04:40    [FILTERED] ARAI   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ARAI   attempt=5  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [LOSS   ] ARAI   attempt=6  src=watchlist  pat=exhaustion(+11b)  entry=1.2402  exit=1.1988  pnl=-3.34%  bars=1  support_ok=True  cum=-3.42%
+2026-04-21 22:04:40    [WIN    ] FCHL   attempt=1  src=computed  pat=exhaustion(+0b)  entry=1.4300  exit=1.4415  pnl=+0.80%  bars=1  support_ok=True  cum=-2.64%
+2026-04-21 22:04:40    [WIN    ] FCHL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=1.4400  exit=1.4415  pnl=+0.10%  bars=1  support_ok=True  cum=-2.55%
+2026-04-21 22:04:40    [FILTERED] ARAI   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [LOSS   ] FCHL   attempt=3  src=computed  pat=exhaustion(+8b)  entry=1.4600  exit=1.4415  pnl=-1.27%  bars=1  support_ok=True  cum=-3.78%
+2026-04-21 22:04:40    [WIN    ] SKYQ   attempt=1  src=watchlist  pat=exhaustion(+1b)  entry=9.3600  exit=9.9000  pnl=+5.77%  bars=1  support_ok=True  cum=+1.77%
+2026-04-21 22:04:40    [FILTERED] CIIT   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [WIN    ] SKYQ   attempt=2  src=watchlist  pat=exhaustion(+6b)  entry=8.9600  exit=9.1908  pnl=+2.58%  bars=1  support_ok=True  cum=+4.39%
+2026-04-21 22:04:40    [FILTERED] LRHC   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [LOSS   ] BIAF   attempt=1  src=computed  pat=exhaustion(+0b)  entry=2.9400  exit=2.8891  pnl=-1.73%  bars=12  support_ok=True  cum=+2.58%
+2026-04-21 22:04:40    [WIN    ] SKYQ   attempt=3  src=watchlist  pat=exhaustion(+10b)  entry=9.2650  exit=9.9000  pnl=+6.85%  bars=3  support_ok=True  cum=+9.61%
+2026-04-21 22:04:40    [WIN    ] LRHC   attempt=2  src=computed  pat=exhaustion(+9b)  entry=4.1430  exit=4.2957  pnl=+3.69%  bars=1  support_ok=True  cum=+13.65%
+2026-04-21 22:04:40    [FILTERED] LRHC   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=3  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=5  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] LRHC   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=6  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=8  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] LNAI   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] LNAI   attempt=6  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] LNAI   attempt=7  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] ASTC   attempt=9  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] LNAI   attempt=8  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40    [FILTERED] LNAI   attempt=9  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-21 22:04:40  [simulator] END — 10 trades / 17 entries (0 skipped/deduped, 23 filtered)  cum_pnl=+13.65%  spy_bh=+1.46%  (2026-04-15 → 2026-04-16)
+2026-04-21 22:04:40  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
