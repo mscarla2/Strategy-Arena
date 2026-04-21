@@ -9,9 +9,6 @@ __pycache__/
 # JSON files (remove this line if you want to keep some)
 *.json
 
-# Markdown files (remove if you want to keep README.md)
-*.md
-
 # SQLite strategies db (keep your other .db files)
 # Adjust as needed
 
