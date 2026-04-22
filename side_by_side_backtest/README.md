@@ -277,6 +277,8 @@ Backtests the strategy using the Card's own support/resistance levels instead of
     - Exits at TP only if day is classified as "choppy".
     - Tightens stop to max 2% on choppy days.
     - Uses Linda Raschke 3/10 Oscillator (SMA based) to detect weakening momentum and tighten stops/TP during the trade.
+- **Position Sizing:** Implements score-driven dynamic position sizing: `trade_size + 200 * (score - 4.3)`, capped between $100 and $1000.
+- **Parallelization:** Uses `ProcessPoolExecutor` for parallel simulation across entries (faster batch runs).
 
 ---
 
