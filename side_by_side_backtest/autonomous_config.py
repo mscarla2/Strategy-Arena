@@ -38,7 +38,8 @@ class StrategyConfig:
         return max(1, int(self.budget_total // self.trade_size))
 
     # ── Signal gate ───────────────────────────────────────────────────────────
-    min_score: float = 0.0      # 0 = no gate; 4.3 = card strategy threshold
+    min_score:           float = 0.0    # 0 = no gate; 4.0+ = card strategy threshold
+    require_support_touch: bool = False  # if True, price must be within touch_band of support
 
     # ── Circuit breaker ──────────────────────────────────────────────────────
     daily_loss_halt: float = 150.0  # $ — halt THIS strategy if daily PnL < -this
@@ -47,8 +48,10 @@ class StrategyConfig:
     entry_limit_slippage: float = 0.005  # limit = entry_price * (1 + this)
 
     # ── Exit — standard ──────────────────────────────────────────────────────
-    default_pt_pct: float = 1.5
-    default_sl_pct: float = 0.124
+    default_pt_pct:      float = 3.1
+    default_sl_pct:      float = 1
+    use_resistance_as_tp: bool = False  # if True, use SetupScore.resistance as TP price
+    use_computed_sl:      bool = False  # if True, use SetupScore.stop as SL price
     max_hold_days:  int   = 1       # force exit after N calendar days (0 = no limit)
 
     # ── Exit — momentum fade ─────────────────────────────────────────────────
@@ -64,20 +67,26 @@ class AutonomousConfig:
     # ── Strategies ────────────────────────────────────────────────────────────
     card_strategy: StrategyConfig = field(default_factory=lambda: StrategyConfig(
         name="card_strategy",
-        display_name="📋 Card Strategy (score ≥ 4.3)",
-        budget_total=5_000.0,   # $500/trade × up to 10 concurrent qualifying setups
-        trade_size=500.0,
-        min_score=4.3,
+        display_name="📋 Card Strategy (score ≥ 4.0 + support touch)",
+        budget_total=5_000.0,       # $1,000/trade × 5 concurrent
+        trade_size=1_000.0,
+        min_score=4.0,
+        require_support_touch=True,  # price must be near support to enter
         daily_loss_halt=300.0,
+        default_sl_pct=1.0,          # 1% SL
+        use_resistance_as_tp=True,   # TP = SetupScore.resistance (computed S/R level)
+        use_computed_sl=False,       # SL = flat 1% (not SetupScore.stop)
     ))
 
     backtest_strategy: StrategyConfig = field(default_factory=lambda: StrategyConfig(
         name="backtest_strategy",
         display_name="📊 Backtest Strategy (pattern only)",
-        budget_total=5_000.0,   # $1,000/trade × 5 concurrent pattern setups
-        trade_size=1_000.0,
+        budget_total=1_000.0,   # $100/trade × 10 concurrent pattern setups
+        trade_size=100.0,
         min_score=0.0,          # no score gate — pure pattern + support touch
         daily_loss_halt=150.0,
+        default_pt_pct=3.75,    # 3.75% TP
+        default_sl_pct=1.0,     # 1% SL
     ))
 
     # ── Shared settings ───────────────────────────────────────────────────────
@@ -95,10 +104,8 @@ class AutonomousConfig:
 
     @property
     def strategies(self) -> list[StrategyConfig]:
-        """Return active strategies for the autonomous trading loop.
-        card_strategy is intentionally excluded — backtest_strategy only.
-        """
-        return [self.backtest_strategy]
+        """Return active strategies for the autonomous trading loop."""
+        return [self.card_strategy, self.backtest_strategy]
 
     @property
     def total_budget(self) -> float:

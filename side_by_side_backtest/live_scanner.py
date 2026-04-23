@@ -330,62 +330,78 @@ def _execute_for_strategy_inner(sc, monitor, engine, strategy_cfg, master_cfg) -
         pass
 
     # ── Strategy-specific entry gate ──────────────────────────────────────────
+    current_mkt_price = getattr(sc, "_current_market_price", None) or sc.entry_price
+
     if sname == "card_strategy":
-        # Card: score ≥ threshold is sufficient — no pattern check needed
+        # Card: score ≥ min_score AND price within touch_band of support
         if sc.score < strategy_cfg.min_score:
             return
+        if getattr(strategy_cfg, "require_support_touch", False):
+            if sc.support and sc.support > 0:
+                touch_dist = abs(current_mkt_price - sc.support) / sc.support
+                if touch_dist > _TOUCH_BAND:
+                    print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — skip: "
+                          f"price ${current_mkt_price:.3f} not within {_TOUCH_BAND*100:.1f}% "
+                          f"of support ${sc.support:.3f}{_RESET}")
+                    return
+            else:
+                return  # no valid support level — skip
     else:
-        # Backtest: requires support touch + pattern (already validated in _check_ticker
-        # via score_setup which scores the pattern component)
-        # Pattern score > 0 means at least some pattern detected
+        # Backtest: requires support touch + pattern
         if sc.pattern_score <= 0:
             return
 
-    # Use actual current market price, not the watchlist support level
-    current_mkt_price = getattr(sc, "_current_market_price", None) or sc.entry_price
     decision = engine.evaluate(sc, current_price=current_mkt_price)
     if not decision.go:
         print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — skip: {decision.reason}{_RESET}")
         return
 
+    # ── PT/SL resolution ──────────────────────────────────────────────────────
+    # Card strategy: TP = SetupScore.resistance (computed S/R level), SL = flat 1%
+    # Backtest strategy: uses optimization_results.csv → per-ticker median → defaults
+    pt_pct = strategy_cfg.default_pt_pct
+    sl_pct = strategy_cfg.default_sl_pct
+    # Override PT with resistance level for card strategy
+    resistance_tp_price: Optional[float] = None
+    if getattr(strategy_cfg, "use_resistance_as_tp", False) and sc.resistance and sc.resistance > current_mkt_price:
+        resistance_tp_price = sc.resistance
+        # Convert resistance price → pt_pct relative to current market price
+        pt_pct = (sc.resistance / current_mkt_price - 1) * 100
+
+    if not getattr(strategy_cfg, "use_resistance_as_tp", False):
+        # Non-card path: use optimization CSV and per-ticker median
+        # Layer 2: global sweep results from optimization_results.csv
+        try:
+            import csv as _csv
+            _opt_csv = Path(__file__).parent / "reports" / "optimization_results.csv"
+            if _opt_csv.exists():
+                with open(_opt_csv, newline="") as _f:
+                    row = next(_csv.DictReader(_f), None)
+                if row:
+                    pt_pct = float(row["profit_target_pct"])
+                    sl_pct = float(row["stop_loss_pct"])
+        except Exception:
+            pass
+
+        # Layer 1: per-ticker median from backtested trades (overrides CSV if ≥3 rows)
+        try:
+            from .db import WatchlistDB
+            with WatchlistDB(master_cfg.db_path) as db:
+                all_trades = db.load_trades()
+            ticker_trades = [t for t in all_trades if t.ticker == sc.ticker]
+            if len(ticker_trades) >= 3:
+                import statistics
+                pt_pct = statistics.median(t.profit_target_pct for t in ticker_trades)
+                sl_pct = statistics.median(t.stop_loss_pct for t in ticker_trades)
+        except Exception:
+            pass
+
     print(
         f"{_GREEN}{_BOLD}{mode_tag}[{sname}] ENTERING {sc.ticker}  "
         f"qty={decision.quantity} @ limit ${decision.limit_price:.3f}  "
-        f"score={sc.score:.1f}  {decision.reason}{_RESET}"
+        f"score={sc.score:.1f}  PT={pt_pct:.2f}%  SL={sl_pct:.2f}%  "
+        f"{decision.reason}{_RESET}"
     )
-
-    # PT/SL resolution (highest priority wins):
-    #   1. Per-ticker median from trades table (≥3 backtested rows)
-    #   2. Global optimized values from reports/optimization_results.csv
-    #   3. Hardcoded defaults in StrategyConfig
-    pt_pct = strategy_cfg.default_pt_pct
-    sl_pct = strategy_cfg.default_sl_pct
-
-    # Layer 2: global sweep results from optimization_results.csv
-    try:
-        import csv as _csv
-        _opt_csv = Path(__file__).parent / "reports" / "optimization_results.csv"
-        if _opt_csv.exists():
-            with open(_opt_csv, newline="") as _f:
-                row = next(_csv.DictReader(_f), None)
-            if row:
-                pt_pct = float(row["profit_target_pct"])
-                sl_pct = float(row["stop_loss_pct"])
-    except Exception:
-        pass
-
-    # Layer 1: per-ticker median from backtested trades (overrides CSV if ≥3 rows)
-    try:
-        from .db import WatchlistDB
-        with WatchlistDB(master_cfg.db_path) as db:
-            all_trades = db.load_trades()
-        ticker_trades = [t for t in all_trades if t.ticker == sc.ticker]
-        if len(ticker_trades) >= 3:
-            import statistics
-            pt_pct = statistics.median(t.profit_target_pct for t in ticker_trades)
-            sl_pct = statistics.median(t.stop_loss_pct for t in ticker_trades)
-    except Exception:
-        pass
 
     # In live mode: place the order then poll for a fill within FILL_TIMEOUT_SEC.
     # Only write to DB on confirmed fill. Cancel + skip if not filled in time.
@@ -641,15 +657,80 @@ def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS,
     return len(pattern_alerts)
 
 
+# How often the fast position monitor loop polls Schwab quotes for exits (seconds).
+# With tight TP/SL (1%), 10s gives sub-15s exit latency at low API cost.
+# Budget: up to 5 open positions × 1 batch quote call / 10s = 6 req/min.
+_POSITION_POLL_INTERVAL = 10
+
+
+def _position_monitor_loop(autonomous: bool = False) -> None:
+    """
+    Background thread: poll open positions every _POSITION_POLL_INTERVAL seconds
+    using live Schwab quotes only (no bar refresh).  This provides sub-15-second
+    exit latency for tight TP/SL without waiting for the full 60-second scan cycle.
+
+    Runs as a daemon thread alongside run_loop().
+    """
+    if not autonomous:
+        return
+
+    from .autonomous_config import CONFIG
+    from .schwab_broker import SchwabBroker
+    from .db import WatchlistDB
+    from .position_monitor import PositionMonitor
+
+    _broker = SchwabBroker(CONFIG) if not CONFIG.paper_mode else None
+    monitor  = PositionMonitor(config=CONFIG, broker=_broker)
+
+    while True:
+        time.sleep(_POSITION_POLL_INTERVAL)
+        try:
+            with WatchlistDB(CONFIG.db_path) as db:
+                open_trades = db.load_actual_trades(open_only=True)
+            if not open_trades:
+                continue
+
+            open_tickers = list({t["ticker"] for t in open_trades})
+            broker_q = SchwabBroker(CONFIG) if not CONFIG.paper_mode else None
+            quotes: dict = {}
+            if broker_q and open_tickers:
+                try:
+                    quotes = broker_q.get_quotes(open_tickers)
+                except Exception:
+                    pass
+
+            # Pass empty bars_map — only exit E (real-time quote) will fire.
+            # The full bar-loop exits (A/B/C/D) run in the main scan_once cycle.
+            closed = monitor.check_all_positions(bars_map={}, quotes_map=quotes)
+            for c in closed:
+                print(
+                    f"{_CYAN}[pos-monitor] FAST EXIT {c['ticker']}  "
+                    f"reason={c['reason']}  PnL=${c['pnl_dollar']:+.2f} ({c['pnl_pct']:+.2f}%){_RESET}"
+                )
+        except Exception as exc:
+            pass  # never crash the background monitor
+
+
 def run_loop(json_path: str, interval: int, autonomous: bool = False) -> None:
     """
     Poll indefinitely, sleeping *interval* seconds between scans.
 
-    With _POLL_INTERVAL=60 every scan pass does BOTH:
-      • Entry attempt scoring (card + backtest strategy gates)
-      • Open-position exit checks (PT/SL/time-stop/momentum-fade)
-      • Heartbeat file write (for the Streamlit status banner)
+    Spawns a background _position_monitor_loop() thread that polls open
+    positions every _POSITION_POLL_INTERVAL (10s) via live Schwab quotes
+    for fast TP/SL exits, independent of the main 60s scan cycle.
     """
+    import threading as _threading
+
+    if autonomous:
+        _t = _threading.Thread(
+            target=_position_monitor_loop,
+            args=(autonomous,),
+            daemon=True,
+            name="position-monitor-fast",
+        )
+        _t.start()
+        print(f"[scanner] Fast position monitor started — polling every {_POSITION_POLL_INTERVAL}s")
+
     mode = "AUTONOMOUS" if autonomous else "alert-only"
     print(f"[scanner] Starting live scan ({mode}) — interval {interval}s — Ctrl+C to stop")
     try:

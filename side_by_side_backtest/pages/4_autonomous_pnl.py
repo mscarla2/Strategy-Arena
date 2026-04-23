@@ -39,7 +39,8 @@ from side_by_side_backtest.autonomous_config import CONFIG
 
 # Strategy display config: name → (display label, colour)
 _STRATEGY_STYLE = {
-    "backtest_strategy": ("📊 Backtest Strategy",  "#7986cb"),
+    "card_strategy":     ("📋 Card Strategy",       "#ef5350"),  # red — live signal-based
+    "backtest_strategy": ("📊 Backtest Strategy",  "#7986cb"),   # blue — pattern-based
 }
 
 # ---------------------------------------------------------------------------
@@ -719,8 +720,6 @@ def main() -> None:
         st.divider()
         st.markdown("**Strategies:**")
         for s in CONFIG.strategies:
-            if s.name != "backtest_strategy":
-                continue
             label, color = _STRATEGY_STYLE.get(s.name, (s.name, "#aaa"))
             st.markdown(
                 f"<span style='color:{color}'>●</span> **{label}**  "
