@@ -160,7 +160,7 @@ def _load_entries(json_path: str, today_only: bool = True) -> list:
 # Per-ticker check
 # ---------------------------------------------------------------------------
 
-def _check_ticker(entry) -> Optional[object]:
+def _check_ticker(entry, quote: dict = None) -> Optional[object]:
     """
     Score the ticker using fresh 30-day bars.
     Returns a SetupScore always (for card strategy score-based entry),
@@ -186,7 +186,12 @@ def _check_ticker(entry) -> Optional[object]:
         # Attach the actual current market price so _execute_for_strategy
         # uses the real bid/ask level, not the watchlist support level.
         if sc is not None:
-            sc._current_market_price = float(bars["close"].iloc[-1])
+            if quote and "quote" in quote:
+                q_price = float(quote["quote"].get("lastPrice", bars["close"].iloc[-1]))
+                sc._current_market_price = q_price
+                print(f"[scanner] {entry.ticker} using Schwab quote price: ${q_price:.3f}")
+            else:
+                sc._current_market_price = float(bars["close"].iloc[-1])
         return sc
     except Exception:
         return None
@@ -353,11 +358,31 @@ def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS,
         print("[scanner] No entries to scan.")
         return 0
 
+    # Fetch Schwab quotes for all active tickers
+    from .schwab_broker import SchwabBroker
+    from .autonomous_config import CONFIG
+    broker = SchwabBroker(CONFIG)
+    
+    all_tickers = list({e.ticker for e in entries})
+    
+    if autonomous:
+        from .db import WatchlistDB
+        try:
+            with WatchlistDB(CONFIG.db_path) as db:
+                open_trades = db.load_actual_trades(open_only=True)
+                all_tickers.extend([t["ticker"] for t in open_trades])
+        except Exception:
+            pass
+    
+    all_tickers = list(set(all_tickers))
+    quotes = {}
+    if all_tickers:
+        quotes = broker.get_quotes(all_tickers)
+
     # Lazy-init autonomous components (shared across alerts this pass)
     monitor  = None
     engines  = []   # list of (DecisionEngine, StrategyConfig, MasterConfig) tuples
     if autonomous:
-        from .autonomous_config import CONFIG
         from .decision_engine import DecisionEngine
         from .position_monitor import PositionMonitor
         monitor = PositionMonitor(config=CONFIG)
@@ -371,7 +396,7 @@ def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS,
     all_scores  = []   # every scored SetupScore (for autonomous execution)
 
     with ThreadPoolExecutor(max_workers=min(max_workers, len(entries))) as pool:
-        futures = {pool.submit(_check_ticker, entry): entry for entry in entries}
+        futures = {pool.submit(_check_ticker, entry, quotes.get(entry.ticker)): entry for entry in entries}
         for fut in as_completed(futures):
             try:
                 sc = fut.result()
@@ -404,7 +429,7 @@ def scan_once(json_path: str, max_workers: int = _SCAN_WORKERS,
             for t in monitor._db_conn().load_actual_trades(open_only=True)
         )
         bmap = {t: load_30day_bars(t) for t in open_tickers}
-        closed = monitor.check_all_positions(bmap)
+        closed = monitor.check_all_positions(bmap, quotes)
         for c in closed:
             print(
                 f"{_CYAN}[auto] EXIT {c['ticker']}  "

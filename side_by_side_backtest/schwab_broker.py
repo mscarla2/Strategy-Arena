@@ -47,6 +47,7 @@ _TOKEN_PATH = Path(__file__).parent / ".schwab_tokens.json"
 _AUTH_URL    = "https://api.schwabapi.com/v1/oauth/authorize"
 _TOKEN_URL   = "https://api.schwabapi.com/v1/oauth/token"
 _API_BASE    = "https://api.schwabapi.com/trader/v1"
+_MARKET_DATA_BASE = "https://api.schwabapi.com/marketdata/v1"
 _REDIRECT    = "https://127.0.0.1"   # register this exact URL in the Schwab developer portal
 
 
@@ -173,6 +174,48 @@ class SchwabBroker:
         except Exception as exc:
             logger.error(f"[schwab] get_positions failed: {exc}")
             return []
+
+    def get_quotes(self, tickers: list[str]) -> dict:
+        """
+        Fetch real-time quotes for multiple tickers.
+        Returns a dict mapping ticker -> {symbol, quote: {lastPrice, bidPrice, askPrice}}
+        """
+        if self._cfg.paper_mode:
+            from .data_fetcher import load_30day_bars
+            results = {}
+            for t in tickers:
+                try:
+                    bars = load_30day_bars(t)
+                    last = float(bars["close"].iloc[-1]) if not bars.empty else 0.0
+                    results[t] = {
+                        "symbol": t,
+                        "quote": {
+                            "lastPrice": last,
+                            "bidPrice": last,
+                            "askPrice": last,
+                        }
+                    }
+                except Exception:
+                    pass
+            return results
+
+        try:
+            token = self._get_access_token()
+            data = self._get(
+                "/quotes",
+                token=token,
+                base_url=_MARKET_DATA_BASE,
+                params={"symbols": ",".join(tickers)},
+            )
+            return data
+        except Exception as exc:
+            logger.error(f"[schwab] get_quotes failed: {exc}")
+            return {}
+
+    def get_quote(self, ticker: str) -> dict:
+        """Fetch real-time quote for a single ticker."""
+        res = self.get_quotes([ticker])
+        return res.get(ticker, {})
 
     # ------------------------------------------------------------------
     # OAuth helpers
@@ -342,11 +385,15 @@ class SchwabBroker:
     # HTTP helpers
     # ------------------------------------------------------------------
 
-    def _get(self, path: str, token: str) -> dict:
+    def _get(self, path: str, token: str, base_url: str = _API_BASE, params: Optional[dict] = None) -> dict:
         import requests
         resp = requests.get(
-            f"{_API_BASE}{path}",
-            headers={"Authorization": f"Bearer {token}"},
+            f"{base_url}{path}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            },
+            params=params,
             timeout=10,
         )
         resp.raise_for_status()

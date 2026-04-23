@@ -75,6 +75,24 @@ class DecisionEngine:
         entry_price = current_price or getattr(setup_score, "entry_price", 0.0)
         sname       = self._strategy.name
 
+        # ── Check 0: Session time gate (Market Open & Postmarket) ────────
+        from datetime import datetime, time, timezone
+        now_utc = datetime.now(tz=timezone.utc)
+        if now_utc.weekday() >= 5:
+            return DecisionResult(
+                go=False,
+                strategy_name=sname,
+                reason=f"[{sname}] Weekend — trading halted",
+            )
+        
+        t = now_utc.time()
+        if not (time(13, 30) <= t <= time(23, 59, 59)):
+            return DecisionResult(
+                go=False,
+                strategy_name=sname,
+                reason=f"[{sname}] Outside trading window (13:30 - 00:00 UTC)",
+            )
+
         # ── Check 1: score gate ──────────────────────────────────────────
         if self._strategy.min_score > 0 and score < self._strategy.min_score:
             return DecisionResult(

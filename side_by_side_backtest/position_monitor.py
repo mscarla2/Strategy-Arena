@@ -76,13 +76,14 @@ class PositionMonitor:
     # Public API
     # ------------------------------------------------------------------
 
-    def check_all_positions(self, bars_map: Dict[str, pd.DataFrame]) -> List[dict]:
+    def check_all_positions(self, bars_map: Dict[str, pd.DataFrame], quotes_map: Optional[dict] = None) -> List[dict]:
         """
         Iterate over all open positions and evaluate exit conditions
-        against the latest bars.
+        against the latest bars and real-time quotes.
 
-        bars_map : {ticker: DataFrame of 5-min OHLCV bars (UTC index)}
-        Returns   : list of closed trade dicts (for logging / UI updates)
+        bars_map   : {ticker: DataFrame of 5-min OHLCV bars (UTC index)}
+        quotes_map : {ticker: {symbol, quote: {lastPrice, ...}}}
+        Returns    : list of closed trade dicts (for logging / UI updates)
         """
         db   = self._db_conn()
         source = "paper" if self._cfg.paper_mode else "live"
@@ -92,10 +93,11 @@ class PositionMonitor:
         for trade in open_trades:
             ticker = trade["ticker"]
             bars   = bars_map.get(ticker)
+            quote  = quotes_map.get(ticker) if quotes_map else None
             if bars is None or bars.empty:
                 continue
 
-            result = self._evaluate_position(trade, bars)
+            result = self._evaluate_position(trade, bars, quote)
             if result:
                 closed.append(result)
 
@@ -105,7 +107,7 @@ class PositionMonitor:
     # Per-position evaluation
     # ------------------------------------------------------------------
 
-    def _evaluate_position(self, trade: dict, bars: pd.DataFrame) -> Optional[dict]:
+    def _evaluate_position(self, trade: dict, bars: pd.DataFrame, quote: Optional[dict] = None) -> Optional[dict]:
         """
         Check a single open position against its exit conditions.
         Returns a closed-trade dict if exit triggered, else None.
@@ -186,6 +188,19 @@ class PositionMonitor:
                 if bar_time_utc >= _SESSION_CLOSE_UTC:
                     return self._close_position(
                         row_id, trade, ts, close, "time_stop", quantity, entry_price
+                    )
+
+        # ── E. Real-Time Quote Exit ───────────────────────────────────
+        if quote and "quote" in quote:
+            q_price = float(quote["quote"].get("lastPrice", 0))
+            if q_price > 0:
+                if q_price >= pt_price:
+                    return self._close_position(
+                        row_id, trade, datetime.now(tz=timezone.utc), q_price, "pt", quantity, entry_price
+                    )
+                if q_price <= sl_price:
+                    return self._close_position(
+                        row_id, trade, datetime.now(tz=timezone.utc), q_price, "sl", quantity, entry_price
                     )
 
         return None  # position still open

@@ -39,7 +39,6 @@ from side_by_side_backtest.autonomous_config import CONFIG
 
 # Strategy display config: name → (display label, colour)
 _STRATEGY_STYLE = {
-    "card_strategy":     ("📋 Card Strategy",     "#26a69a"),
     "backtest_strategy": ("📊 Backtest Strategy",  "#7986cb"),
 }
 
@@ -431,7 +430,7 @@ def _score_watchlist_live(json_path: str) -> pd.DataFrame:
                 "Support $": f"${sc.support:.3f}"     if sc.support     else "—",
                 "R/R":       f"{sc.rr_ratio:.1f}:1"   if sc.rr_ratio    else "—",
                 "ADX":       f"{sc.adx:.1f}"           if sc.adx         else "—",
-                "Enter?":    "✅" if sc.score >= CONFIG.card_strategy.min_score else "❌",
+                "Enter?":    "✅" if sc.pattern_found else "❌",
             })
         except Exception:
             pass
@@ -508,7 +507,6 @@ def _render_live_panel(json_path: str) -> None:
     else:
         st.dataframe(wdf, use_container_width=True, hide_index=True)
         st.caption(
-            f"📋 Card Strategy enters when Score ≥ {CONFIG.card_strategy.min_score} (✅).  "
             f"📊 Backtest Strategy enters on any pattern + support touch."
         )
 
@@ -573,6 +571,44 @@ def _render_live_panel(json_path: str) -> None:
             })
         st.dataframe(pd.DataFrame(pos_rows), use_container_width=True, hide_index=True)
 
+        st.markdown("**🔓 Position Actions**")
+        for r in open_rows:
+            col1, col2 = st.columns([3, 1])
+            col1.write(f"**{r['ticker']}** ({_STRATEGY_STYLE.get(r.get('strategy_name', ''), (r.get('strategy_name', ''), ''))[0]})")
+            if col2.button(f"🔴 Sell {r['ticker']}", key=f"sell_{r['id']}"):
+                try:
+                    from side_by_side_backtest.position_monitor import PositionMonitor
+                    from side_by_side_backtest.data_fetcher import load_30day_bars
+                    monitor = PositionMonitor(CONFIG)
+                    bars = load_30day_bars(r['ticker'])
+                    last_price = float(bars["close"].iloc[-1]) if not bars.empty else r['entry_price']
+                    
+                    monitor._close_position(
+                        row_id=r['id'],
+                        trade=r,
+                        exit_ts=datetime.now(tz=timezone.utc),
+                        exit_price=last_price,
+                        reason="manual_exit",
+                        quantity=r.get('quantity', 1),
+                        entry_price=r['entry_price']
+                    )
+                    
+                    import json as _json
+                    _OVERRIDE_PATH = _PKG / ".autonomous_overrides.json"
+                    overrides = {"pt_pct": 1.5, "sl_pct": 0.124, "kill_switch": True}
+                    if _OVERRIDE_PATH.exists():
+                        try:
+                            overrides = _json.loads(_OVERRIDE_PATH.read_text())
+                            overrides["kill_switch"] = True
+                        except Exception:
+                            pass
+                    _OVERRIDE_PATH.write_text(_json.dumps(overrides))
+                    
+                    st.success(f"Sold {r['ticker']} manually. Auto Trader HALTED.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Manual exit failed: {exc}")
+
     st.divider()
 
 
@@ -607,12 +643,41 @@ def main() -> None:
         st.divider()
         st.markdown("**Strategies:**")
         for s in CONFIG.strategies:
+            if s.name != "backtest_strategy":
+                continue
             label, color = _STRATEGY_STYLE.get(s.name, (s.name, "#aaa"))
             st.markdown(
                 f"<span style='color:{color}'>●</span> **{label}**  "
                 f"  Budget ${s.budget_total:,.0f} | ${s.trade_size:.0f}/trade",
                 unsafe_allow_html=True,
             )
+        st.divider()
+        st.markdown("**⚙️ Controls**")
+        
+        # Load existing overrides
+        import json as _json
+        _OVERRIDE_PATH = _PKG / ".autonomous_overrides.json"
+        overrides = {"pt_pct": 1.5, "sl_pct": 0.124, "kill_switch": False}
+        if _OVERRIDE_PATH.exists():
+            try:
+                overrides = _json.loads(_OVERRIDE_PATH.read_text())
+            except Exception:
+                pass
+                
+        # Tunable SP/SL
+        new_pt = st.slider("Take Profit % (SP)", 0.1, 10.0, float(overrides.get("pt_pct", 1.5)), 0.1)
+        new_sl = st.slider("Stop Loss % (SL)", 0.01, 5.0, float(overrides.get("sl_pct", 0.124)), 0.01)
+        
+        # Kill Switch
+        kill = st.toggle("🛑 STOP AUTO TRADER", value=overrides.get("kill_switch", False))
+        
+        if new_pt != overrides.get("pt_pct") or new_sl != overrides.get("sl_pct") or kill != overrides.get("kill_switch"):
+            overrides["pt_pct"] = new_pt
+            overrides["sl_pct"] = new_sl
+            overrides["kill_switch"] = kill
+            _OVERRIDE_PATH.write_text(_json.dumps(overrides))
+            st.toast("⚙️ Overrides saved!")
+
         st.divider()
         source_filter = st.radio(
             "Show trades from:",
