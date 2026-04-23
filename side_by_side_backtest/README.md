@@ -441,6 +441,11 @@ side_by_side_backtest/
 
 A fully closed-loop execution pipeline that watches the live scanner, applies circuit breakers, opens and manages positions automatically, and records real fills in a separate `actual_trades` table.
 
+### 1-Minute Heartbeat & Schwab Integration
+- **Heartbeat:** The system evaluates trades, refreshes prices, and monitors positions on a strict **1-minute synchronized heartbeat**.
+- **Real-Time Quotes:** Integrated with the **Schwab Market Data API** (`/quotes`) to fetch real-time pricing for accurate entry execution and exit tracking.
+- **Trading Windows:** Only executes during Market Open and Postmarket hours (Monday-Friday, 9:30 AM – 8:00 PM ET).
+
 ### Configuration — `autonomous_config.py`
 
 | Parameter | Default | Description |
@@ -451,6 +456,12 @@ A fully closed-loop execution pipeline that watches the live scanner, applies ci
 | `trailing_activate_pct` | 0.5% | Profit level before high-water trailing starts |
 | `momentum_fade_pct` | 0.3% | Retreat from high-water → early exit |
 | `paper_mode` | `True` | No real orders until flipped to `False` |
+
+### Safety Controls (Dashboard)
+Access the **📊 Autonomous PnL** sidebar for operational gates:
+- **Tunable SP/SL:** Real-time sliders to override target/stop default metrics.
+- **Kill Switch:** Instant auto-trader cessation triggers.
+- **Manual Sell:** Immediate market order liquidation shortcuts.
 
 ### Run Paper Trading
 
@@ -469,6 +480,7 @@ Paper trades appear in `actual_trades` table (`source='paper'`). View them on th
    ```
    SCHWAB_CLIENT_ID=your_client_id
    SCHWAB_CLIENT_SECRET=your_client_secret
+   SCHWAB_ACCOUNT_HASH=your_account_hash
    ```
 3. First-time OAuth consent:
    ```bash
@@ -480,8 +492,8 @@ Paper trades appear in `actual_trades` table (`source='paper'`). View them on th
 
 | Exit Type | Trigger |
 |-----------|---------|
-| **Take-Profit** | Close ≥ entry × (1 + PT%) |
-| **Stop-Loss** | Close ≤ entry × (1 − SL%) |
+| **Take-Profit** | Close or Quote ≥ entry × (1 + PT%) |
+| **Stop-Loss** | Close or Quote ≤ entry × (1 − SL%) |
 | **Momentum Fade** | Close retreats > 0.3% from high-water (activates after 0.5% gain) OR MACD histogram falling 2 bars while profitable |
 | **Time Stop** | Session close 4:00 PM ET |
 
