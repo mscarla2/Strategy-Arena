@@ -77,6 +77,7 @@ class SchwabBroker:
 
         if not self._cfg.paper_mode:
             self._load_env()
+            self._account_hash = os.environ.get("SCHWAB_ACCOUNT_HASH") or None
 
     # ------------------------------------------------------------------
     # Public trading API
@@ -126,8 +127,10 @@ class SchwabBroker:
                 f"/accounts/{self._account_hash}/orders/{order_id}",
                 token=token,
             )
-            status     = data.get("status", "UNKNOWN").lower()
-            fill_price = data.get("price", 0.0)
+            status = data.get("status", "UNKNOWN").lower()
+            # Schwab returns "price" = limit price, "averagePrice" = actual fill price.
+            # Prefer averagePrice (actual fill); fall back to price (limit) if missing.
+            fill_price = float(data.get("averagePrice") or data.get("price") or 0.0)
             return OrderResult(order_id=order_id, status=status, fill_price=fill_price)
         except Exception as exc:
             logger.error(f"[schwab] get_order_status failed: {exc}")

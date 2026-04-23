@@ -82,8 +82,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # Data
     p.add_argument(
         "--provider",
-        choices=["yfinance", "alpaca"],
-        default="yfinance",
+        choices=["schwab_data", "yfinance", "alpaca"],
+        default="schwab_data",
         help="OHLCV data provider",
     )
     p.add_argument(

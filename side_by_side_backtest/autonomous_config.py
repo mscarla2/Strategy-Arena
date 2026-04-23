@@ -74,15 +74,16 @@ class AutonomousConfig:
     backtest_strategy: StrategyConfig = field(default_factory=lambda: StrategyConfig(
         name="backtest_strategy",
         display_name="📊 Backtest Strategy (pattern only)",
-        budget_total=1_000.0,   # $500/trade × 2 concurrent pattern setups
-        trade_size=500.0,
+        budget_total=5_000.0,   # $1,000/trade × 5 concurrent pattern setups
+        trade_size=1_000.0,
         min_score=0.0,          # no score gate — pure pattern + support touch
         daily_loss_halt=150.0,
     ))
 
     # ── Shared settings ───────────────────────────────────────────────────────
     poll_interval_sec: int = 300    # 5-min bar polling interval
-    paper_mode:        bool = True  # True = paper trades; False = live Schwab orders
+    paper_mode:        bool = False  # True = paper trades; False = live Schwab orders
+    data_provider:     str  = "schwab_data"  # "schwab_data" | "yfinance" | "alpaca"
 
     # ── Paths ─────────────────────────────────────────────────────────────────
     db_path: Path = field(
@@ -94,8 +95,10 @@ class AutonomousConfig:
 
     @property
     def strategies(self) -> list[StrategyConfig]:
-        """Return both strategies as a list for iteration."""
-        return [self.card_strategy, self.backtest_strategy]
+        """Return active strategies for the autonomous trading loop.
+        card_strategy is intentionally excluded — backtest_strategy only.
+        """
+        return [self.backtest_strategy]
 
     @property
     def total_budget(self) -> float:

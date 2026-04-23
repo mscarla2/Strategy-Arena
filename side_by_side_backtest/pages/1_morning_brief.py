@@ -110,7 +110,7 @@ def _parse_posts(raw: List[dict]) -> List[WatchlistEntry]:
 # don't hammer yfinance on every fragment tick (default every 60s).
 # Key: ticker str  →  Value: float (monotonic timestamp of last refresh)
 _last_refresh_ts: dict[str, float] = {}
-_REFRESH_COOLDOWN = 55.0   # seconds — slightly less than the 60s scan interval
+_REFRESH_COOLDOWN = 30.0   # seconds — Schwab supports 120 req/min; rescore every 30s
 
 # Background-refresh state: tracks whether a fire-and-forget refresh is in
 # flight so we don't spawn duplicate threads on rapid Streamlit reruns.
@@ -149,7 +149,8 @@ def _prefetch_tickers(
 
     def _refresh_one(ticker: str) -> None:
         try:
-            refresh_today(ticker)
+            from side_by_side_backtest.autonomous_config import CONFIG as _CONFIG
+            refresh_today(ticker, provider=getattr(_CONFIG, "data_provider", "schwab_data"))
             _last_refresh_ts[ticker] = _wall_clock.monotonic()
         except Exception:
             pass  # network failure is non-fatal; scoring will use cached data
@@ -204,16 +205,20 @@ def _score_entries_raw(entries_json: str, live_refresh: bool = False,
     unique_tickers = list({e.ticker for e in entries}) if entries else []
 
     # ── Phase 1: network refresh ──────────────────────────────────────────────
+    # Use a file-based "seeded today" flag so page refreshes don't regress to
+    # the background (stale) path.  Only use background=True if no parquet
+    # exists at all for any ticker (genuinely first run of the day).
     if live_refresh and unique_tickers:
-        is_first = not st.session_state.get("_brief_has_scored", False)
-        if is_first:
-            # First render: fire-and-forget so UI paints immediately from disk.
-            # Mark scored now so the next tick uses the blocking path.
-            st.session_state["_brief_has_scored"] = True
+        from side_by_side_backtest.data_fetcher import _30d_path
+        import datetime as _dt
+        _any_missing = any(not _30d_path(t).exists() for t in unique_tickers)
+        if _any_missing:
+            # No cache at all — fire background so UI paints immediately.
             _prefetch_tickers(unique_tickers, max_workers=max(max_workers, 12),
                               background=True)
         else:
-            # Subsequent ticks: block until fresh data is ready before scoring.
+            # Cache exists — always block for fresh data before scoring so
+            # prices displayed are current even after a page refresh.
             _prefetch_tickers(unique_tickers, max_workers=max(max_workers, 12),
                               background=False)
 
@@ -350,7 +355,7 @@ def _sidebar() -> tuple[str, Optional[str]]:
 
     st.sidebar.divider()
     st.sidebar.subheader("🔴 Live Scanner")
-    _scan_options = {"1 min": 60, "5 min": 300, "15 min": 900, "Off": None}
+    _scan_options = {"30 sec": 30, "1 min": 60, "5 min": 300, "15 min": 900, "Off": None}
     _scan_label   = st.sidebar.selectbox("Auto-rescore interval", list(_scan_options.keys()), index=0)
     scan_interval = _scan_options[_scan_label]
 

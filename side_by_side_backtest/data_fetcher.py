@@ -2,8 +2,9 @@
 Phase 1 — Data Fetcher
 Retrieves 5-minute OHLCV bars for a given ticker and date range.
 
-Primary provider: yfinance  (no API key needed)
-Optional: Alpaca Markets (set ALPACA_API_KEY / ALPACA_SECRET_KEY env vars)
+Primary provider: schwab_data  (Schwab Market Data API — requires OAuth tokens)
+Fallback:         yfinance     (no API key needed)
+Optional:         alpaca       (set ALPACA_API_KEY / ALPACA_SECRET_KEY env vars)
 
 All returned data is a pandas DataFrame with a DatetimeTZAware index (UTC)
 and columns: open, high, low, close, volume  (all lowercase).
@@ -212,6 +213,135 @@ def _normalise(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Schwab Market Data backend
+# ---------------------------------------------------------------------------
+
+def _fetch_schwab_pricehistory(ticker: str, start: str, end: str,
+                                frequency: int = 5,
+                                frequency_type: str = "minute") -> pd.DataFrame:
+    """
+    Fetch OHLCV bars via the Schwab Market Data /pricehistory endpoint.
+
+    Parameters
+    ----------
+    ticker         : e.g. "TLRY"
+    start / end    : ISO date strings "YYYY-MM-DD"
+    frequency      : bar size — 5 for 5-min, 1 for daily (use frequency_type="daily")
+    frequency_type : "minute" | "daily" | "weekly" | "monthly"
+
+    Returns
+    -------
+    pd.DataFrame with UTC DatetimeIndex and columns [open, high, low, close, volume].
+    Raises ValueError if Schwab returns no candles.
+    """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    # Load .env for credentials (same path as SchwabBroker)
+    _env_path = Path(__file__).parent.parent / ".env"
+    if _env_path.exists():
+        for _line in _env_path.read_text().splitlines():
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                import os as _os
+                _os.environ.setdefault(_k.strip(), _v.strip())
+
+    from .schwab_broker import SchwabBroker as _SB, _MARKET_DATA_BASE
+
+    class _NullConfig:
+        paper_mode = False
+
+    _broker = _SB.__new__(_SB)
+    _broker._cfg          = _NullConfig()
+    _broker._access_token = None
+    _broker._token_expiry = 0.0
+    _broker._account_hash = None
+    _SB._load_env()
+
+    token = _broker._get_access_token()
+
+    # Convert ISO dates to millisecond epoch timestamps (Schwab uses ms)
+    _start_ms = int(datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    # end is exclusive in Schwab — add 1 day so it's inclusive like yfinance
+    _end_dt   = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    _end_ms   = int(_end_dt.timestamp() * 1000)
+
+    # Schwab requires periodType to be compatible with frequencyType:
+    #   minute → periodType=day
+    #   daily  → periodType=year  (day + daily = 400 Bad Request)
+    _period_type = "day" if frequency_type == "minute" else "year"
+
+    params = {
+        "symbol":               ticker,
+        "periodType":           _period_type,
+        "frequencyType":        frequency_type,
+        "frequency":            frequency,
+        "startDate":            _start_ms,
+        "endDate":              _end_ms,
+        "needExtendedHoursData": "true",
+    }
+
+    import requests as _req
+    resp = _req.get(
+        f"{_MARKET_DATA_BASE}/pricehistory",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept":        "application/json",
+        },
+        params=params,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    candles = data.get("candles", [])
+    if not candles:
+        raise ValueError(f"Schwab pricehistory returned no candles for {ticker} {start}→{end}")
+
+    df = pd.DataFrame(candles)
+    # "datetime" column is milliseconds UTC
+    df.index = pd.to_datetime(df["datetime"], unit="ms", utc=True)
+    df.index.name = None
+    df = df.rename(columns={"open": "open", "high": "high", "low": "low",
+                             "close": "close", "volume": "volume"})
+    df = df[["open", "high", "low", "close", "volume"]].copy()
+    df.sort_index(inplace=True)
+    _logger.debug(f"[schwab_data] {ticker}: {len(df)} candles {start}→{end}")
+    return df
+
+
+def _fetch_schwab_daily(ticker: str, start: str, end: str) -> pd.DataFrame:
+    """Daily OHLCV bars via Schwab pricehistory. Used for benchmark charts (SPY etc.)."""
+    return _fetch_schwab_pricehistory(ticker, start, end,
+                                      frequency=1, frequency_type="daily")
+
+
+def _fetch_schwab_1min(ticker: str, lookback_minutes: int = 30) -> pd.DataFrame:
+    """
+    Fetch the last *lookback_minutes* of 1-minute bars for *ticker* via Schwab.
+
+    Used by the position monitor exit loop for sub-5-minute TP/SL resolution.
+    Returns an empty DataFrame on any error (caller falls back to 5-min parquet).
+
+    With a 120 req/min budget this is called once per open position per scan cycle
+    (~5 positions max → 5 req per 60s cycle = well within budget).
+    """
+    try:
+        end_dt   = datetime.now(tz=timezone.utc)
+        start_dt = end_dt - timedelta(minutes=lookback_minutes)
+        return _fetch_schwab_pricehistory(
+            ticker,
+            start_dt.strftime("%Y-%m-%d"),
+            end_dt.strftime("%Y-%m-%d"),
+            frequency=1,
+            frequency_type="minute",
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
 # yfinance backend
 # ---------------------------------------------------------------------------
 
@@ -356,6 +486,15 @@ def fetch_5min_bars(
     try:
         if provider == "alpaca":
             df = _fetch_alpaca(ticker, start, end_dt)
+        elif provider == "schwab_data":
+            try:
+                df = _fetch_schwab_pricehistory(ticker, start, end_dt)
+            except Exception as schwab_exc:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    f"[schwab_data] {ticker} failed ({schwab_exc}), falling back to yfinance"
+                )
+                df = _fetch_yfinance(ticker, start, end_dt)
         else:
             df = _fetch_yfinance(ticker, start, end_dt)
     except Exception as exc:
@@ -388,7 +527,7 @@ def fetch_bars_for_entry(
     entry,
     lookback_days: int = 3,
     forward_days: int = 2,
-    provider: str = "yfinance",
+    provider: str = "schwab_data",
 ) -> pd.DataFrame:
     """
     Convenience wrapper: given a WatchlistEntry, fetch bars around the post date.
@@ -416,9 +555,9 @@ def fetch_bars_batch(
     entries: list,
     lookback_days: int = 3,
     forward_days: int = 2,
-    provider: str = "yfinance",
-    delay_seconds: float = 0.5,
-    max_workers: int = 8,
+    provider: str = "schwab_data",
+    delay_seconds: float = 0.2,
+    max_workers: int = 15,
 ) -> Dict[str, pd.DataFrame]:
     """
     Fetch bars for multiple WatchlistEntry objects in parallel.
@@ -428,9 +567,9 @@ def fetch_bars_batch(
     Parameters
     ----------
     max_workers : int
-        Maximum concurrent fetch threads (default 8).  Keep ≤ 8 to stay within
-        yfinance's informal rate-limit.  Each thread sleeps *delay_seconds* after
-        its own fetch to spread the load.
+        Maximum concurrent fetch threads (default 15).  Schwab supports 120 req/min;
+        15 workers × 0.2s delay ≈ 75 req/min sustained, safely within budget.
+        Each thread sleeps *delay_seconds* after its own fetch to spread the load.
     """
     # Build the deduplicated work list first
     seen: set[tuple] = set()
@@ -513,7 +652,7 @@ def _30d_path(ticker: str) -> Path:
 
 def fetch_30day_bars(
     ticker: str,
-    provider: str = "yfinance",
+    provider: str = "schwab_data",
     window_days: int = 30,
 ) -> pd.DataFrame:
     """
@@ -521,8 +660,9 @@ def fetch_30day_bars(
     *ticker*, write to the canonical ``{ticker}_30d_5m.parquet`` file, and
     return the DataFrame.
 
-    yfinance only holds 60 days of 5-min data; this is clamped automatically.
+    Schwab supports up to 40 calendar days of 5-min intraday data.
     All sessions (pre-market, regular, after-hours) are included.
+    Falls back to yfinance on any Schwab error.
     """
     ticker = ticker.strip().lstrip("$").upper()
     if is_banned(ticker):
@@ -559,7 +699,7 @@ def fetch_30day_bars(
 
 def refresh_today(
     ticker: str,
-    provider: str = "yfinance",
+    provider: str = "schwab_data",
     window_days: int = 30,
 ) -> pd.DataFrame:
     """

@@ -212,42 +212,62 @@ class PositionMonitor:
     def _close_position(self, row_id: int, trade: dict, exit_ts,
                         exit_price: float, reason: str,
                         quantity: int, entry_price: float) -> dict:
-        """Record the exit in the DB and (if live) send the sell order."""
-        pnl_dollar = (exit_price - entry_price) * quantity
-        pnl_pct    = (exit_price - entry_price) / entry_price * 100
+        """Record the exit in the DB and (if live) send the sell order.
+
+        In live mode the sell order is polled for its actual fill price so the DB
+        records the real execution price, not the trigger/limit price.
+        """
+        import time as _time
+
+        actual_exit_price = exit_price  # overridden by real fill price in live mode
+        actual_exit_ts    = exit_ts
+
+        # Live mode: send limit sell and poll for the actual fill price
+        if not self._cfg.paper_mode and self._broker is not None:
+            try:
+                order = self._broker.place_order(
+                    ticker=trade["ticker"],
+                    side="sell",
+                    quantity=quantity,
+                    limit_price=round(exit_price, 4),
+                )
+                if order.status not in ("error",) and order.order_id:
+                    # Poll for fill to get the actual execution price
+                    _deadline = _time.time() + 30
+                    while _time.time() < _deadline:
+                        _time.sleep(2)
+                        _status = self._broker.get_order_status(order.order_id)
+                        if _status.status == "filled":
+                            if _status.fill_price and _status.fill_price > 0:
+                                actual_exit_price = _status.fill_price
+                            actual_exit_ts = datetime.now(tz=timezone.utc)
+                            break
+                        if _status.status in ("cancelled", "error"):
+                            break
+            except Exception as exc:
+                logger.error(f"[position_monitor] Broker sell failed for {trade['ticker']}: {exc}")
+
+        pnl_dollar = (actual_exit_price - entry_price) * quantity
+        pnl_pct    = (actual_exit_price - entry_price) / entry_price * 100
         outcome    = "win" if pnl_dollar >= 0 else "loss"
+        exit_ts_str = str(actual_exit_ts)
 
-        exit_ts_str = str(exit_ts)
-
-        # Paper mode: log to DB
         db = self._db_conn()
         db.update_actual_trade_exit(
             row_id=row_id,
             exit_ts=exit_ts_str,
-            exit_price=exit_price,
+            exit_price=actual_exit_price,
             exit_reason=reason,
             pnl_dollar=round(pnl_dollar, 4),
             pnl_pct=round(pnl_pct, 4),
             outcome=outcome,
         )
 
-        # Live mode: send sell order via broker
-        if not self._cfg.paper_mode and self._broker is not None:
-            try:
-                self._broker.place_order(
-                    ticker=trade["ticker"],
-                    side="sell",
-                    quantity=quantity,
-                    limit_price=None,  # market order on exit
-                )
-            except Exception as exc:
-                logger.error(f"[position_monitor] Broker sell failed for {trade['ticker']}: {exc}")
-
         result = {
             "ticker":     trade["ticker"],
             "row_id":     row_id,
             "exit_ts":    exit_ts_str,
-            "exit_price": exit_price,
+            "exit_price": actual_exit_price,
             "reason":     reason,
             "pnl_dollar": round(pnl_dollar, 4),
             "pnl_pct":    round(pnl_pct, 4),
@@ -255,7 +275,8 @@ class PositionMonitor:
         }
         logger.info(
             f"[position_monitor] EXIT {trade['ticker']} "
-            f"reason={reason}  PnL=${pnl_dollar:+.2f} ({pnl_pct:+.2f}%)"
+            f"reason={reason}  PnL=${pnl_dollar:+.2f} ({pnl_pct:+.2f}%)  "
+            f"fill=${actual_exit_price:.4f}"
         )
         return result
 

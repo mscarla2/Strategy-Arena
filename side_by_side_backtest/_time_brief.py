@@ -61,8 +61,8 @@ bg_done = threading.Event()
 bg_start = time.perf_counter()
 
 def _bg():
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        futs = [pool.submit(refresh_today, t) for t in unique]
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        futs = [pool.submit(refresh_today, t, "schwab_data") for t in unique]
         for f in as_completed(futs):
             try: f.result()
             except Exception: pass
@@ -80,8 +80,8 @@ print(f"  Background refresh completed in: {bg_elapsed:.0f}ms (invisible to user
 print(f"\n{'─'*64}")
 print("SUBSEQUENT TICK (blocking refresh + re-score):")
 t0 = time.perf_counter()
-with ThreadPoolExecutor(max_workers=12) as pool:
-    futs = [pool.submit(refresh_today, t) for t in unique]
+with ThreadPoolExecutor(max_workers=15) as pool:
+    futs = [pool.submit(refresh_today, t, "schwab_data") for t in unique]
     for f in as_completed(futs):
         try: f.result()
         except Exception: pass

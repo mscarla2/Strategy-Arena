@@ -91,7 +91,7 @@ def main(argv=None) -> None:
 
     # ── Build bars_map from cache ────────────────────────────────────────────
     from .data_fetcher import fetch_bars_batch
-    bars_map = fetch_bars_batch(entries, provider="yfinance")
+    bars_map = fetch_bars_batch(entries, provider="schwab_data")
 
     if not bars_map:
         print("[run_sanity] ERROR: No OHLCV data available — run main pipeline first to populate cache.")

@@ -61,10 +61,10 @@ def _tickers_from_json(json_path: str) -> List[str]:
 
 def refresh_all(
     tickers: List[str],
-    provider: str = "yfinance",
+    provider: str = "schwab_data",
     full: bool = False,
-    delay: float = 0.4,
-    max_workers: int = 6,
+    delay: float = 0.2,
+    max_workers: int = 15,
 ) -> None:
     """
     Refresh 30-day cache for each ticker in *tickers* using a thread pool.
@@ -72,8 +72,8 @@ def refresh_all(
     Parameters
     ----------
     max_workers : int
-        Concurrent download threads (default 6).  yfinance is tolerant of
-        modest concurrency; keep ≤ 8 to avoid transient 429s.
+        Concurrent download threads (default 15).  Schwab supports 120 req/min;
+        15 workers × 0.2s delay ≈ 75 req/min sustained, safely within budget.
     delay : float
         Per-worker polite sleep after each fetch (seconds).
     """
@@ -146,8 +146,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Path to scraped_watchlists.json")
     p.add_argument("--tickers", nargs="+", metavar="TICKER",
                    help="Override ticker list (skip JSON parsing)")
-    p.add_argument("--provider", default="yfinance",
-                   choices=["yfinance", "alpaca"])
+    p.add_argument("--provider", default="schwab_data",
+                   choices=["schwab_data", "yfinance", "alpaca"])
     p.add_argument("--full", action="store_true",
                    help="Force full 30-day re-fetch even if parquet exists")
     p.add_argument("--delay", type=float, default=0.4,

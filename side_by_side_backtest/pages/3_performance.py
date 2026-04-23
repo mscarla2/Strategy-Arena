@@ -225,33 +225,44 @@ def _fetch_benchmark_series(start_date: str, end_date: str) -> Optional[pd.Serie
     """
     Download QQQ daily closes and return a cumulative-return % Series
     indexed by date, normalised so the first trading day = 0 %.
+    Uses Schwab Market Data API with yfinance fallback.
     Returns None if data is unavailable.
     """
     try:
-        import yfinance as yf  # type: ignore
-        from side_by_side_backtest.data_fetcher import _silence_yfinance
-        with _silence_yfinance():
-            raw = yf.download(
-                _BENCHMARK_TICKER, start=start_date, end=end_date,
-                interval="1d", progress=False, auto_adjust=True,
-                threads=False,
-            )
-        if raw.empty:
-            return None
+        from side_by_side_backtest.data_fetcher import _fetch_schwab_daily, _silence_yfinance
 
-        # yfinance ≥0.2 returns a MultiIndex: ('Close','QQQ'), ('High','QQQ'), …
-        # Handle both MultiIndex and flat-column DataFrames robustly.
-        cols = raw.columns
-        if isinstance(cols, pd.MultiIndex):
-            close = raw[("Close", _BENCHMARK_TICKER)].dropna()
-        elif "Close" in cols:
-            close = raw["Close"].dropna()
-        else:
-            close = raw.iloc[:, 0].dropna()
+        raw_close = None
 
-        if len(close) < 2:
+        # Primary: Schwab daily bars
+        try:
+            schwab_df = _fetch_schwab_daily(_BENCHMARK_TICKER, start_date, end_date)
+            if not schwab_df.empty and "close" in schwab_df.columns:
+                raw_close = schwab_df["close"].dropna()
+        except Exception as schwab_exc:
+            pass  # fall through to yfinance
+
+        # Fallback: yfinance
+        if raw_close is None or len(raw_close) < 2:
+            import yfinance as yf  # type: ignore
+            with _silence_yfinance():
+                raw = yf.download(
+                    _BENCHMARK_TICKER, start=start_date, end=end_date,
+                    interval="1d", progress=False, auto_adjust=True,
+                    threads=False,
+                )
+            if raw.empty:
+                return None
+            cols = raw.columns
+            if isinstance(cols, pd.MultiIndex):
+                raw_close = raw[("Close", _BENCHMARK_TICKER)].dropna()
+            elif "Close" in cols:
+                raw_close = raw["Close"].dropna()
+            else:
+                raw_close = raw.iloc[:, 0].dropna()
+
+        if raw_close is None or len(raw_close) < 2:
             return None
-        cum_pct = (close / float(close.iloc[0]) - 1) * 100
+        cum_pct = (raw_close / float(raw_close.iloc[0]) - 1) * 100
         cum_pct.index = pd.to_datetime(cum_pct.index)
         return cum_pct
     except Exception as exc:

@@ -51,39 +51,71 @@ def _ensure_scanner_running(json_path: str, notifications: bool = False) -> None
     Run an immediate autonomous scan pass in-process on first page load,
     then spawn a background subprocess for the ongoing 5-min loop.
 
+    The initial scan is guarded by the scanner's heartbeat file
+    (.scanner_heartbeat.json) so that a page refresh does NOT trigger
+    a duplicate scan — only a genuinely stale/missing heartbeat (older
+    than poll_interval_sec) causes a new in-process pass.
+
     notifications=False (the default) suppresses macOS desktop alerts and
-    sounds entirely — both for the in-process initial scan AND for the
-    background subprocess.  Only set notifications=True when the user
-    explicitly enables the toggle in the sidebar.
+    sounds entirely.  Only set notifications=True when the user explicitly
+    enables the toggle in the sidebar.
     """
+    import json as _json
+    import time as _time
+
     # ── Kill stale subprocesses FIRST (before initial scan) ──────────────────
     if not st.session_state.get("scanner_proc_started"):
         subprocess.run(["pkill", "-f", "live_scanner"], capture_output=True)
         st.session_state["scanner_proc_started"] = True
 
-    # ── Immediate first-pass (in-process, runs once per Streamlit session) ──
-    if not st.session_state.get("initial_scan_done"):
+    # ── Immediate first-pass — only if heartbeat is stale / missing ──────────
+    _heartbeat_file = _PKG / ".scanner_heartbeat.json"
+    _poll_sec = CONFIG.poll_interval_sec  # e.g. 300
+
+    def _heartbeat_age_sec() -> float:
+        """Seconds since the last heartbeat write; inf if missing/unreadable."""
+        try:
+            data = _json.loads(_heartbeat_file.read_text())
+            iso = data.get("last_scan_ts", "")
+            if not iso:
+                return float("inf")
+            from datetime import datetime, timezone
+            last = datetime.fromisoformat(iso)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            return (datetime.now(tz=timezone.utc) - last).total_seconds()
+        except Exception:
+            return float("inf")
+
+    _needs_scan = _heartbeat_age_sec() > _poll_sec
+
+    if _needs_scan and not st.session_state.get("initial_scan_done"):
         st.session_state["initial_scan_done"] = True
         try:
             with st.spinner("🤖 Running initial autonomous scan…"):
                 import side_by_side_backtest.live_scanner as _ls
-                # Always OFF for the in-process scan regardless of sidebar toggle —
-                # the Streamlit process should never fire macOS notifications/sounds.
-                _prev = _ls._NOTIFICATIONS_ENABLED
                 _ls._NOTIFICATIONS_ENABLED = False
                 try:
                     _ls.scan_once(json_path, autonomous=True)
                 finally:
-                    # Restore only if the user explicitly enabled notifications;
-                    # otherwise leave disabled so subsequent in-process calls
-                    # (e.g. cache-busted reruns) remain silent.
                     _ls._NOTIFICATIONS_ENABLED = notifications
-            # Record the scan timestamp so the status banner can show it
             st.session_state["last_scan_ts"] = datetime.now(tz=timezone.utc)
             st.cache_data.clear()
             st.toast("✅ Initial scan complete — positions entered", icon="🤖")
         except Exception as exc:
             st.warning(f"Initial scan error: {exc}")
+    elif not _needs_scan:
+        # Background loop is live — just update the UI timestamp from heartbeat
+        try:
+            data = _json.loads(_heartbeat_file.read_text())
+            iso = data.get("last_scan_ts", "")
+            if iso:
+                ts = datetime.fromisoformat(iso)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                st.session_state.setdefault("last_scan_ts", ts)
+        except Exception:
+            pass
 
     # ── Background loop subprocess (ongoing 5-min polling) ──────────────────
 
@@ -342,7 +374,7 @@ def _render_scan_status() -> None:
 # Refresh-cooldown guard (mirrors Morning Brief _last_refresh_ts pattern).
 # Key: ticker → monotonic wall-clock of last refresh_today() call.
 _wl_last_refresh: dict = {}
-_WL_REFRESH_COOLDOWN = 55.0   # seconds — slightly under the 60 s fragment interval
+_WL_REFRESH_COOLDOWN = 30.0   # seconds — Schwab supports 120 req/min; refresh every 30s
 _wl_bg_lock = _threading.Lock()
 _wl_bg_tickers: set = set()
 
@@ -505,7 +537,7 @@ def _render_live_panel(json_path: str) -> None:
     if wdf.empty:
         st.caption("No scored setups yet — bars may still be loading.")
     else:
-        st.dataframe(wdf, use_container_width=True, hide_index=True)
+        st.dataframe(wdf, width='stretch', hide_index=True)
         st.caption(
             f"📊 Backtest Strategy enters on any pattern + support touch."
         )
@@ -515,15 +547,31 @@ def _render_live_panel(json_path: str) -> None:
     # ═══════════════════════════════════════════════════════════════════════════
     # SECTION 3 — Open position exit check + live P&L
     # ═══════════════════════════════════════════════════════════════════════════
-    monitor = PositionMonitor(config=CONFIG)
+    from side_by_side_backtest.schwab_broker import SchwabBroker
+    _live_broker = SchwabBroker(CONFIG) if not CONFIG.paper_mode else None
+    monitor = PositionMonitor(config=CONFIG, broker=_live_broker)
 
     try:
         with WatchlistDB(CONFIG.db_path) as _db:
             open_rows = _db.load_actual_trades(open_only=True)
         open_tickers = list({r["ticker"] for r in open_rows})
         if open_tickers:
-            bars_map = {t: load_30day_bars(t) for t in open_tickers}
-            closed_exits = monitor.check_all_positions(bars_map)
+            # Refresh intraday bars before checking exits so TP/SL bar-loop sees today's data
+            from side_by_side_backtest.data_fetcher import refresh_today
+            bars_map = {}
+            for t in open_tickers:
+                try:
+                    refresh_today(t, provider=getattr(CONFIG, "data_provider", "schwab_data"))
+                except Exception:
+                    pass
+                bars_map[t] = load_30day_bars(t)
+            # Fetch live quotes for accurate current prices
+            quotes_map = {}
+            try:
+                quotes_map = _live_broker.get_quotes(open_tickers) if _live_broker else {}
+            except Exception:
+                pass
+            closed_exits = monitor.check_all_positions(bars_map, quotes_map)
             for c in closed_exits:
                 st.toast(
                     f"{'✅' if c.get('pnl_dollar', 0) >= 0 else '❌'} "
@@ -544,14 +592,28 @@ def _render_live_panel(json_path: str) -> None:
     if not open_rows:
         st.caption("No open positions right now.")
     else:
+        # Fetch live Schwab quotes for all open positions
+        _open_quotes: dict = {}
+        try:
+            _open_tickers = [r["ticker"] for r in open_rows]
+            _broker_q = SchwabBroker(CONFIG) if not CONFIG.paper_mode else None
+            if _broker_q:
+                _open_quotes = _broker_q.get_quotes(_open_tickers)
+        except Exception:
+            pass
+
         pos_rows = []
         for r in open_rows:
             ticker      = r["ticker"]
             entry_price = r.get("entry_price") or 0
             qty         = r.get("quantity") or 0
+            # Use live Schwab quote if available, fall back to last bar close
             try:
-                bars = load_30day_bars(ticker)
-                last = float(bars["close"].iloc[-1]) if not bars.empty else 0.0
+                q = _open_quotes.get(ticker, {})
+                last = float(q.get("quote", {}).get("lastPrice", 0)) if q else 0.0
+                if not last:
+                    bars = load_30day_bars(ticker)
+                    last = float(bars["close"].iloc[-1]) if not bars.empty else 0.0
             except Exception:
                 last = 0.0
             unreal     = (last - entry_price) * qty if last and entry_price else 0.0
@@ -569,7 +631,7 @@ def _render_live_panel(json_path: str) -> None:
                 "Score":      r.get("setup_score", "—"),
                 "Entry Time": pd.Timestamp(r["entry_ts"]).strftime("%H:%M:%S") if r.get("entry_ts") else "—",
             })
-        st.dataframe(pd.DataFrame(pos_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(pos_rows), width='stretch', hide_index=True)
 
         st.markdown("**🔓 Position Actions**")
         for r in open_rows:
@@ -578,15 +640,29 @@ def _render_live_panel(json_path: str) -> None:
             if col2.button(f"🔴 Sell {r['ticker']}", key=f"sell_{r['id']}"):
                 try:
                     from side_by_side_backtest.position_monitor import PositionMonitor
-                    from side_by_side_backtest.data_fetcher import load_30day_bars
-                    monitor = PositionMonitor(CONFIG)
-                    bars = load_30day_bars(r['ticker'])
-                    last_price = float(bars["close"].iloc[-1]) if not bars.empty else r['entry_price']
-                    
+                    from side_by_side_backtest.schwab_broker import SchwabBroker as _SB
+                    _mb = _SB(CONFIG) if not CONFIG.paper_mode else None
+                    monitor = PositionMonitor(CONFIG, broker=_mb)
+
+                    # Fetch live Schwab quote immediately before placing the sell
+                    # so the limit price and exit price are as fresh as possible.
+                    last_price = r['entry_price']  # fallback
+                    if _mb:
+                        try:
+                            _q = _mb.get_quote(r['ticker'])
+                            _lp = float(_q.get("quote", {}).get("lastPrice", 0))
+                            if _lp > 0:
+                                last_price = _lp
+                        except Exception:
+                            pass
+
+                    # Timestamp is captured right as we fire the Schwab endpoint
+                    exit_ts = datetime.now(tz=timezone.utc)
+
                     monitor._close_position(
                         row_id=r['id'],
                         trade=r,
-                        exit_ts=datetime.now(tz=timezone.utc),
+                        exit_ts=exit_ts,
                         exit_price=last_price,
                         reason="manual_exit",
                         quantity=r.get('quantity', 1),

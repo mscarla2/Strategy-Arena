@@ -940,37 +940,44 @@ def _fetch_spy_benchmark(start_date: str, end_date: str) -> Optional[float]:
     Returns None if data is unavailable.
 
     Guarantees at least a 5-calendar-day window so weekend-only ranges don't
-    produce empty results.  yfinance noise is suppressed via _silence_yfinance().
+    produce empty results.  Uses Schwab Market Data API with yfinance fallback.
     """
     from datetime import datetime as _dt, timedelta as _td
-    from side_by_side_backtest.data_fetcher import _silence_yfinance
+    from side_by_side_backtest.data_fetcher import _fetch_schwab_daily, _silence_yfinance
 
     try:
-        import yfinance as yf
-
         # Ensure the window spans at least 5 calendar days (covers Mon–Fri).
         start_dt = _dt.fromisoformat(start_date)
         end_dt   = _dt.fromisoformat(end_date)
         if (end_dt - start_dt).days < 5:
             end_dt = start_dt + _td(days=5)
 
-        with _silence_yfinance():
-            spy = yf.download(
-                "SPY",
-                start=start_dt.strftime("%Y-%m-%d"),
-                end=end_dt.strftime("%Y-%m-%d"),
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
-                threads=False,
-            )
+        start_s = start_dt.strftime("%Y-%m-%d")
+        end_s   = end_dt.strftime("%Y-%m-%d")
+
+        # Primary: Schwab daily bars
+        spy = pd.DataFrame()
+        try:
+            spy = _fetch_schwab_daily("SPY", start_s, end_s)
+        except Exception as schwab_exc:
+            print(f"[simulator] Schwab SPY fetch failed ({schwab_exc}), falling back to yfinance")
+
+        # Fallback: yfinance
+        if spy.empty:
+            import yfinance as yf
+            with _silence_yfinance():
+                raw = yf.download(
+                    "SPY", start=start_s, end=end_s,
+                    interval="1d", progress=False, auto_adjust=True, threads=False,
+                )
+            if not raw.empty:
+                close_col = ("Close", "SPY") if isinstance(raw.columns, pd.MultiIndex) else "Close"
+                spy = raw[[close_col]].rename(columns={close_col: "close"})
 
         if spy.empty or len(spy) < 2:
             return None
-        close = spy["Close"] if "Close" in spy.columns else spy.iloc[:, 0]
-        # flatten MultiIndex columns if present
-        if hasattr(close, "columns"):
-            close = close.iloc[:, 0]
+
+        close = spy["close"] if "close" in spy.columns else spy.iloc[:, 0]
         start_price = float(close.iloc[0])
         end_price   = float(close.iloc[-1])
         if start_price <= 0:
