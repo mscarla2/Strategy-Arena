@@ -18,3 +18,9 @@ venv/
 
 # Environment variables (never commit real secrets)
 .env
+
+# Schwab OAuth credentials & tokens (each developer generates their own)
+.schwab_callback.key
+.schwab_callback.pem
+.schwab_tokens.json
+.scanner_heartbeat.json
