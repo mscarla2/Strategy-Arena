@@ -47,7 +47,7 @@ _TOKEN_PATH = Path(__file__).parent / ".schwab_tokens.json"
 _AUTH_URL    = "https://api.schwabapi.com/v1/oauth/authorize"
 _TOKEN_URL   = "https://api.schwabapi.com/v1/oauth/token"
 _API_BASE    = "https://api.schwabapi.com/trader/v1"
-_REDIRECT    = "https://127.0.0.1"
+_REDIRECT    = "https://127.0.0.1"   # register this exact URL in the Schwab developer portal
 
 
 @dataclass
@@ -183,6 +183,10 @@ class SchwabBroker:
         Interactive browser-based first auth flow.
         Run once: python -m side_by_side_backtest.schwab_broker --auth
         Saves access + refresh tokens to .schwab_tokens.json.
+
+        Spins up a loopback HTTP server on port 443 to auto-capture the
+        OAuth code — no manual URL pasting required.
+        Callback URL to register in the Schwab developer portal: https://127.0.0.1
         """
         client_id = os.environ.get("SCHWAB_CLIENT_ID", "")
         if not client_id:
@@ -196,15 +200,62 @@ class SchwabBroker:
         }
         url = f"{_AUTH_URL}?{urlencode(params)}"
         print(f"\nOpening browser for Schwab OAuth consent:\n{url}\n")
-        webbrowser.open(url)
 
-        redirect_url = input("Paste the full redirect URL here (https://127.0.0.1?code=...): ").strip()
-        code = parse_qs(urlparse(redirect_url).query).get("code", [""])[0]
-        if not code:
-            raise ValueError("No auth code found in redirect URL")
-
+        code = self._loopback_capture(url)
         self._exchange_code_for_tokens(code)
         print("✅ Auth complete — tokens saved to", _TOKEN_PATH)
+
+    @staticmethod
+    def _loopback_capture(auth_url: str) -> str:
+        """
+        Start a temporary HTTPS server on 127.0.0.1:443 to auto-catch the
+        OAuth redirect code.  Falls back to manual paste if binding port 443
+        requires elevated privileges.
+        """
+        import ssl, threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        captured: dict = {}
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                captured["code"] = parse_qs(urlparse(self.path).query).get("code", [""])[0]
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"<h2>Auth complete - you can close this tab.</h2>")
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+            def log_message(self, *_):  # silence request logs
+                pass
+
+        # Generate a self-signed cert so the server speaks HTTPS
+        cert_path = Path(__file__).parent / ".schwab_callback.pem"
+        key_path  = Path(__file__).parent / ".schwab_callback.key"
+        if not cert_path.exists():
+            os.system(
+                f'openssl req -x509 -newkey rsa:2048 -keyout "{key_path}" '
+                f'-out "{cert_path}" -days 3650 -nodes -subj "/CN=127.0.0.1" '
+                f'2>/dev/null'
+            )
+
+        try:
+            server = HTTPServer(("127.0.0.1", 443), _Handler)
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            server.socket = ctx.wrap_socket(server.socket, server_side=True)
+            print("Listening on https://127.0.0.1 for OAuth callback…")
+            webbrowser.open(auth_url)
+            server.serve_forever()
+        except PermissionError:
+            print("⚠️  Could not bind port 443 (needs sudo).  "
+                  "Falling back to manual URL paste.")
+            webbrowser.open(auth_url)
+            redirect_url = input("Paste the full redirect URL (https://127.0.0.1?code=...): ").strip()
+            captured["code"] = parse_qs(urlparse(redirect_url).query).get("code", [""])[0]
+
+        if not captured.get("code"):
+            raise ValueError("No auth code captured — check the browser redirect.")
+        return captured["code"]
 
     def _exchange_code_for_tokens(self, code: str) -> None:
         import base64, requests
@@ -355,19 +406,32 @@ class SchwabBroker:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
+
+    class _NullConfig:
+        paper_mode = False  # force live path so env vars are loaded
+
+    parser = argparse.ArgumentParser(description="Schwab OAuth helper")
     parser.add_argument("--auth", action="store_true",
-                        help="Run the browser-based OAuth first-auth flow")
+                        help="Browser OAuth flow (register https://127.0.0.1 as callback URL)")
+    parser.add_argument("--get-account-hash", action="store_true",
+                        help="Print account hashes after completing --auth")
     args = parser.parse_args()
 
+    SchwabBroker._load_env()
+    broker = SchwabBroker.__new__(SchwabBroker)
+    broker._cfg          = _NullConfig()
+    broker._access_token = None
+    broker._token_expiry = 0.0
+    broker._account_hash = None
+
     if args.auth:
-        SchwabBroker._load_env()
-        broker = SchwabBroker.__new__(SchwabBroker)
-        broker._cfg = None
-        broker._access_token = None
-        broker._token_expiry = 0.0
-        broker._account_hash = None
-        broker._load_env()
         broker.run_first_auth()
+    elif args.get_account_hash:
+        # /accounts/accountNumbers returns [{accountNumber, hashValue}, ...]
+        data = broker._get("/accounts/accountNumbers", token=broker._get_access_token())
+        for acct in data:
+            raw  = acct.get("accountNumber", "?")
+            hash_val = acct.get("hashValue", "?")
+            print(f"  account {raw}  ->  SCHWAB_ACCOUNT_HASH={hash_val}")
     else:
         parser.print_help()

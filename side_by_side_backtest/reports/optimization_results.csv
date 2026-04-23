@@ -1,2 +1,2 @@
 profit_target_pct,stop_loss_pct,total_trades,wins,losses,timeouts,win_rate,avg_win_pct,avg_loss_pct,expectancy,profit_factor,avg_hold_bars,support_respect_rate,wr_pre_market,wr_market_open,wr_after_hours,wr_unknown
-13.4704,0.1305,141,53,83,5,0.3759,3.4123,-0.1263,1.2038,6.6802,5.94,1.0,0.4286,0.3768,0.3611,0.3333
+3.7843,0.1202,838,352,472,14,0.42,2.0433,-0.1806,0.7536,64.5342,3.42,1.0,0.4298,0.431,0.3451,0.4646
