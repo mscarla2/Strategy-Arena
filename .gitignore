@@ -15,3 +15,6 @@ venv/
 
 # OS files
 .DS_Store
+
+# Environment variables (never commit real secrets)
+.env
