@@ -133,13 +133,15 @@ class SchwabBroker:
             token = self._get_access_token()
             payload = {
                 "orderStrategyType": "OCO",
+                "session": "NORMAL",
+                "duration": "DAY",
                 "childOrderStrategies": [
                     {
                         "orderStrategyType": "SINGLE",
                         "session": "NORMAL",
                         "duration": "DAY",
                         "orderType": "LIMIT",
-                        "price": str(round(tp_price, 2)),
+                        "price": round(tp_price, 2),
                         "orderLegCollection": [
                             {
                                 "instruction": "SELL",
@@ -153,7 +155,7 @@ class SchwabBroker:
                         "session": "NORMAL",
                         "duration": "DAY",
                         "orderType": "STOP",
-                        "stopPrice": str(round(sl_price, 2)),
+                        "stopPrice": round(sl_price, 2),
                         "orderLegCollection": [
                             {
                                 "instruction": "SELL",
@@ -444,7 +446,7 @@ class SchwabBroker:
             ],
         }
         if limit_price:
-            payload["price"] = str(round(limit_price, 2))
+            payload["price"] = round(limit_price, 2)
         return payload
 
     # ------------------------------------------------------------------
