@@ -141,7 +141,7 @@ class SchwabBroker:
                         "session": "NORMAL",
                         "duration": "DAY",
                         "orderType": "LIMIT",
-                        "price": round(tp_price, 2),
+                        "price": "{:.2f}".format(round(tp_price, 2)),
                         "orderLegCollection": [
                             {
                                 "instruction": "SELL",
@@ -155,7 +155,7 @@ class SchwabBroker:
                         "session": "NORMAL",
                         "duration": "DAY",
                         "orderType": "STOP",
-                        "stopPrice": round(sl_price, 2),
+                        "stopPrice": "{:.2f}".format(round(sl_price, 2)),
                         "orderLegCollection": [
                             {
                                 "instruction": "SELL",
@@ -446,7 +446,7 @@ class SchwabBroker:
             ],
         }
         if limit_price:
-            payload["price"] = round(limit_price, 2)
+            payload["price"] = "{:.2f}".format(round(limit_price, 2))
         return payload
 
     # ------------------------------------------------------------------
