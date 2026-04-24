@@ -94,7 +94,6 @@ class MasterBracketController:
                 
         # Deploy new expanded OCO bracket
         try:
-            # Place OCO order via Broker API (assuming place_oco exists or is stubbed)
             oco_order = self.broker.place_oco(
                 ticker=self.ticker,
                 quantity=self.total_filled_qty,
@@ -104,9 +103,20 @@ class MasterBracketController:
             self.active_oco_id = oco_order.order_id
             logger.info(f"[MasterBracket] Deployed fresh OCO bracket {self.active_oco_id} for {self.total_filled_qty} shares")
         except Exception as e:
-            logger.error(f"[MasterBracket] CRITICAL: Failed to deploy OCO bracket for {self.ticker}: {e}")
-            # Fallback: market sell immediately if bracket fails to prevent unprotected exposure
-            # self.emergency_liquidate()
+            logger.error(f"[MasterBracket] ❌ CRITICAL: Failed to deploy OCO bracket for {self.ticker}: {e}")
+            logger.error(f"[MasterBracket] 🚨 INITIATING EMERGENCY LIQUIDATION for {self.total_filled_qty} shares of {self.ticker}!")
+            try:
+                self.broker.place_order(
+                    ticker=self.ticker,
+                    side="sell",
+                    quantity=self.total_filled_qty,
+                    limit_price=None  # Market order for instant exit
+                )
+                logger.error(f"[MasterBracket] 🚨 Emergency Market Sell transmitted for {self.ticker}.")
+            except Exception as sell_err:
+                logger.error(f"[MasterBracket] 🛑 FATAL: EMERGENCY LIQUIDATION FAILED for {self.ticker}: {sell_err}")
+                logger.error(f"[MasterBracket] 🛑 ACCOUNT IS EXPOSED NAKED FOR {self.total_filled_qty} SHARES! ACT ACT ACT!")
+            raise e  # Re-raise to abort the Slicing Engine loop!
 
 
 class SlicingEngine:

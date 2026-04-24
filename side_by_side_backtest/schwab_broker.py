@@ -119,7 +119,7 @@ class SchwabBroker:
     def place_oco(self, ticker: str, quantity: int, tp_price: float, sl_price: float) -> OrderResult:
         """
         Place an OCO (One Cancels Other) bracket order for Take-Profit and Stop-Loss.
-        Stubbed for Paper Mode.
+        Sends a nested OrderStrategy JSON payload to Schwab Trader API.
         """
         if self._cfg.paper_mode:
             msg = f"[PAPER] OCO Bracket placed for {quantity}×{ticker}: TP=${tp_price:.4f}, SL=${sl_price:.4f}"
@@ -128,7 +128,56 @@ class SchwabBroker:
             import uuid
             return OrderResult(order_id=f"oco-{uuid.uuid4().hex[:8]}", status="paper", message=msg)
 
-        raise NotImplementedError("Live OCO brackets not yet implemented in SchwabBroker")
+        # Live path: build complex Schwab OCO payload
+        try:
+            token = self._get_access_token()
+            payload = {
+                "orderStrategyType": "OCO",
+                "childOrderStrategies": [
+                    {
+                        "orderStrategyType": "SINGLE",
+                        "session": "NORMAL",
+                        "duration": "DAY",
+                        "orderType": "LIMIT",
+                        "price": str(round(tp_price, 2)),
+                        "orderLegCollection": [
+                            {
+                                "instruction": "SELL",
+                                "quantity": quantity,
+                                "instrument": {"symbol": ticker, "assetType": "EQUITY"}
+                            }
+                        ]
+                    },
+                    {
+                        "orderStrategyType": "SINGLE",
+                        "session": "NORMAL",
+                        "duration": "DAY",
+                        "orderType": "STOP",
+                        "stopPrice": str(round(sl_price, 2)),
+                        "orderLegCollection": [
+                            {
+                                "instruction": "SELL",
+                                "quantity": quantity,
+                                "instrument": {"symbol": ticker, "assetType": "EQUITY"}
+                            }
+                        ]
+                    }
+                ]
+            }
+
+            resp = self._post(
+                f"/accounts/{self._account_hash}/orders",
+                json=payload,
+                token=token,
+            )
+            # Schwab returns the parent order ID in the Location header
+            order_id = resp.headers.get("Location", "").split("/")[-1]
+            logger.info(f"[schwab] Live OCO Bracket placed for {quantity}×{ticker} → parent_id={order_id}")
+            return OrderResult(order_id=order_id, status="pending", fill_price=0.0)
+
+        except Exception as exc:
+            logger.error(f"[schwab] Live place_oco failed: {exc}")
+            raise exc  # Re-raise so live_scanner triggers emergency liquidation!
 
     def get_order_status(self, order_id: str) -> OrderResult:
         """Poll order status. Returns 'filled' | 'pending' | 'cancelled'."""

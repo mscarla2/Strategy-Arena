@@ -539,7 +539,22 @@ def _execute_for_strategy_inner(sc, monitor, engine, strategy_cfg, master_cfg) -
             broker.place_oco(sc.ticker, filled_qty, pt_price, sl_price)
             print(f"{_GREEN}{mode_tag}[{sname}] Deployed OCO Bracket for {filled_qty} shares.{_RESET}")
         except Exception as e:
-            print(f"{_RED}{mode_tag}[{sname}] Failed to deploy OCO: {e}{_RESET}")
+            print(f"\n{_RED}═══ CRITICAL RISK ALERT ═══════════════════════════════════════════════")
+            print(f"CRITICAL: Failed to deploy protective OCO Bracket for {sc.ticker}: {e}")
+            print(f"INITIATING EMERGENCY LIQUIDATION — DUMPING SHARES AT MARKET TO PROTECT CAPITAL")
+            print(f"═══════════════════════════════════════════════════════════════════════{_RESET}\n")
+            try:
+                broker.place_order(
+                    ticker=sc.ticker,
+                    side="sell",
+                    quantity=filled_qty,
+                    limit_price=None  # Market order for instant exit
+                )
+                print(f"{_RED}Emergency Market Sell order transmitted for {sc.ticker}.{_RESET}")
+            except Exception as sell_err:
+                print(f"{_RED}🚨 FATAL: EMERGENCY LIQUIDATION FAILED for {sc.ticker}: {sell_err}")
+                print(f"🚨 ACCOUNT IS CURRENTLY EXPOSED NAKED FOR {filled_qty} SHARES OF {sc.ticker}! LIQUIDATE MANUALLY!{_RESET}")
+            return  # Abort DB write and position opening!
 
     # Recalculate percentages for DB record based on actual entry price
     pt_pct_db = ((pt_price / actual_entry_price) - 1) * 100
