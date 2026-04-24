@@ -134,6 +134,9 @@ class SlicingEngine:
         logger.info(f"[SlicingEngine] Starting execution for {self.ticker}. Total Qty: {self.total_qty}")
         
         slice_count = 0
+        consecutive_timeouts = 0
+        max_timeouts = 3
+
         while remaining_qty > 0:
             slice_count += 1
             current_chunk = min(remaining_qty, self.max_chunk)
@@ -151,20 +154,26 @@ class SlicingEngine:
                 if order.status == "error":
                     logger.error(f"[SlicingEngine] Slice #{slice_count} rejected: {order.message}")
                     break
-                    
+
                 # Monitor fills for this chunk (timeout after 120 seconds)
-                fill_qty = self._monitor_chunk_fills(order.order_id, timeout=120)
+                fill_qty = self._monitor_chunk_fills(order.order_id, current_chunk, timeout=120)
                 
                 if fill_qty > 0:
                     self.filled_qty += fill_qty
                     remaining_qty -= fill_qty
+                    consecutive_timeouts = 0 # Reset on success
                     logger.info(f"[SlicingEngine] Slice #{slice_count} filled {fill_qty} shares. Remaining: {remaining_qty}")
                     
                     # Trigger Master Bracket Controller sync
                     on_fill_callback(fill_qty)
                 else:
-                    logger.warning(f"[SlicingEngine] Slice #{slice_count} timed out unfilled. Pausing.")
+                    consecutive_timeouts += 1
+                    logger.warning(f"[SlicingEngine] Slice #{slice_count} timed out unfilled ({consecutive_timeouts}/{max_timeouts}). Cancelling.")
                     self.broker.cancel_order(order.order_id)
+                    
+                    if consecutive_timeouts >= max_timeouts:
+                        logger.error(f"[SlicingEngine] Slicing ABORTED after {max_timeouts} consecutive timeouts.")
+                        break
                     
             except Exception as e:
                 logger.error(f"[SlicingEngine] Error executing slice #{slice_count}: {e}")
@@ -177,21 +186,21 @@ class SlicingEngine:
         logger.info(f"[SlicingEngine] Slicing complete for {self.ticker}. Final Filled Qty: {self.filled_qty}/{self.total_qty}")
         return self.filled_qty
 
-    def _monitor_chunk_fills(self, order_id: str, timeout: int) -> int:
+    def _monitor_chunk_fills(self, order_id: str, expected_qty: int, timeout: int) -> int:
         """
         Polls the broker for the specific chunk order until filled or timeout.
-        Returns the number of filled shares.
+        Returns the number of filled shares (expected_qty if filled, 0 if failed/cancelled).
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
             time.sleep(2)
             try:
                 status = self.broker.get_order_status(order_id)
-                if status.status == "filled":
-                    return status.filled_quantity or 0
+                if status.status in ("filled", "paper"):
+                    return expected_qty
                 elif status.status in ("cancelled", "error"):
-                    return status.filled_quantity or 0
+                    return 0
             except Exception as e:
                 logger.warning(f"[SlicingEngine] Error polling order {order_id}: {e}")
-        
+
         return 0
