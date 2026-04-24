@@ -6,6 +6,57 @@ from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
+import numpy as np
+
+class VolumeLiquidityGate:
+    """
+    Phase 2: Volume Constraints (Liquidity Gate)
+    Caps trade size based on historical median volume for the specific Time-of-Day bucket.
+    """
+    def __init__(self, vol_matrix: dict, participation_rate: float = 0.02):
+        """
+        vol_matrix: {ticker: {'HH:MM': [volumes]}}
+        participation_rate: max fraction of median volume to take (default 2%)
+        """
+        self.vol_matrix = vol_matrix
+        self.rate = participation_rate
+
+    def get_max_trade_size(self, ticker: str, current_ts: datetime) -> int:
+        """Return the maximum allowed shares based on TOD liquidity."""
+        profile = self.vol_matrix.get(ticker)
+        if not profile:
+            return 0
+
+        bucket = current_ts.strftime("%H:%M")
+        vols = profile.get(bucket)
+
+        if not vols:
+            # Fallback: use global median for this ticker if specific bucket is empty
+            all_vols = [v for b in profile.values() for v in b]
+            if not all_vols:
+                return 0
+            median_vol = np.median(all_vols)
+        else:
+            median_vol = np.median(vols)
+
+        return int(median_vol * self.rate)
+
+    def constrain_size(self, requested_qty: int, ticker: str, current_ts: datetime) -> tuple[int, bool]:
+        """
+        Caps requested_qty at the TOD liquidity limit.
+        Returns (final_qty, is_constrained).
+        """
+        max_shares = self.get_max_trade_size(ticker, current_ts)
+        if max_shares <= 0:
+            # If no volume data at all, default to a conservative 100 shares to avoid lockup
+            # or return 0 to block. We return 0 to be safe (Liquidity Vacuum protection).
+            return 0, True
+
+        if requested_qty > max_shares:
+            return max_shares, True
+        return requested_qty, False
+
+
 class MasterBracketController:
     """
     Phase 4: OCO Synchronization Logic
