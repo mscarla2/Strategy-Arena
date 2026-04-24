@@ -77,6 +77,7 @@ class AutonomousConfig:
         name="card_strategy",
         display_name="📋 Card Strategy (score ≥ 4.3 + ATR Sizing)",
         budget_total=5_000.0,       # $5,000 total allocated
+        trade_size=1_000.0,         # Determines max_concurrent = 5
         min_score=4.3,              # Validated champion threshold
         require_support_touch=True, # Price must be near support
         daily_loss_halt=300.0,
@@ -95,6 +96,7 @@ class AutonomousConfig:
         name="backtest_strategy",
         display_name="📊 Backtest Strategy (pattern only + ATR Sizing)",
         budget_total=1_000.0,       # $1,000 total allocated
+        trade_size=100.0,           # Determines max_concurrent = 10
         min_score=0.0,              # No score gate — pure pattern
         daily_loss_halt=150.0,
         use_atr=True,               # Phase 3: Active ATR Brackets

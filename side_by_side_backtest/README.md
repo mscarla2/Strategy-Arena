@@ -467,46 +467,48 @@ The dashboard runs a live 60-second refresh fragment. The **🔓 Open Positions*
 
 ---
 
-## 🃏 Setup Card Enhancements (v3)
-
-Setup cards in the Morning Brief now show historical performance context below the score breakdown:
-
-| New Field | Description |
-|-----------|-------------|
-| **Expectancy** | Expected PnL per trade from historical simulated results |
-| **Avg Win** | Average winning trade PnL% for this ticker |
-| **Avg Loss** | Average losing trade PnL% for this ticker |
-| **Last 5 streak** | `✅✅❌✅✅` — last 5 trade outcomes for this ticker |
-
-These fields populate from the simulated `trades` table. Cards without trade history show nothing (avoids noisy zeros).
-
 ---
 
-## CLI Reference (updated)
+## 🛠️ CLI Reference (Updated)
 
+### 1. Historical Validation & PnL Re-Simulation (`run_today.py`)
+Used to simulate historical performance across all 54 sessions *exactly as if you traded the production bot today* (includes bug fixes, ATR sizing, volume caps, and brackets).
+
+```bash
+# The Champion: Card Strategy (Unbiased / Loose Mode)
+python3 side_by_side_backtest/run_today.py --mode card --all --size-mode atr --risk-budget 20 --use-atr --no-support-ok
+
+# The Anchor: Backtest Strategy (Strict Heartbeat Mode)
+python3 side_by_side_backtest/run_today.py --mode sbs --all --size-mode atr --risk-budget 10 --use-atr
+
+# Core Options:
+#   --mode sbs|card         Execution mode (default: sbs)
+#   --all                   Run across all 54 historical sessions
+#   --size-mode flat|atr    Sizing model: flat dollar vs. ATR Risk-based
+#   --risk-budget X         Dollar risk per trade if size-mode=atr (default $10)
+#   --use-atr               Force dynamic ATR brackets (SL=1.5x, TP=3.0x)
+#   --no-support-ok         Disable the 60-min look-ahead safety gate (Loose mode)
+#   --min X                 Minimum score for card mode (default 4.3)
 ```
-./venv/bin/python -m side_by_side_backtest.main [OPTIONS]
-  --watchlist PATH        scraped_watchlists.json
-  --tickers TICKER ...    auto-build watchlist from ohlcv_cache/ (skip JSON)
-  --skip-fetch            use 30d parquet only (no network)
-  --no-sweep              single-pass only (skip Phase 4 optimisation)
-  --auto-tune             Bayesian PT/SL search (Optuna TPE)
-  --n-trials N            default 100
-  --tune-objective        expectancy | profit_factor | win_rate
-  --validate-oos          walk-forward OOS check after auto-tune
-  --oos-split FLOAT       OOS fraction (default 0.30)
-  --min-score FLOAT       Only simulate entries with SetupScore ≥ this (0–10, default 0)
-  --eqh                   run in EQH Breakout mode
-  --export                CSV + PNG heatmaps
-  --sanity                run 7-check suite
 
-./venv/bin/python -m side_by_side_backtest.live_scanner [OPTIONS]
-  --interval INT          poll seconds (default 300)
-  --once                  single pass and exit
-  --autonomous            closed-loop execution mode (paper by default)
+### 2. Live Scanner & Paper Trading
+```bash
+# Run autonomous paper trading (uses CONFIG singleton)
+python3 -m side_by_side_backtest.live_scanner --watchlist scraped_watchlists.json --autonomous
 
-./venv/bin/python -m side_by_side_backtest.schwab_broker [OPTIONS]
-  --auth                  run first-time OAuth browser consent flow
+# Standard options:
+#   --interval INT          Poll seconds (default 300 for 5-min heartbeat)
+#   --once                  Single pass and exit
+#   --no-notifications      Suppress macOS alerts and sounds
+```
+
+### 3. Broker Auth
+```bash
+# Interactive browser-based Schwab OAuth consent flow
+python3 -m side_by_side_backtest.schwab_broker --auth
+
+# Print account hashes after auth
+python3 -m side_by_side_backtest.schwab_broker --get-account-hash
 ```
 
 ---
