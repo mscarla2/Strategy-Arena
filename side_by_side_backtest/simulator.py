@@ -294,11 +294,8 @@ def simulate_entry(
     ticker  = entry.ticker
 
     # ── ATR Calculation ───────────────────────────────────────────────────────
-    if use_atr:
-        from .pattern_engine import _atr
-        atr_series = _atr(bars, period=14)
-    else:
-        atr_series = pd.Series()
+    from .pattern_engine import _atr
+    atr_series = _atr(bars, period=14)
 
     # ── S/R resolution — use pre-computed if available (fast path) ────────────
     if precomputed_support is not None:
@@ -454,29 +451,34 @@ def simulate_entry(
         # TP: use watchlist resistance level when available and > entry_price.
         # Fix 5: cap resistance-level override at 1.5× the configured profit target
         #        so trades don't stay open chasing an unreachable level.
-        if use_atr and not atr_series.empty:
-            # Find ATR for the current bar timestamp
-            try:
-                current_atr = float(atr_series.loc[ts])
-            except KeyError:
-                current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
-            
+        # Always resolve current_atr for position sizing (Phase 1)
+        try:
+            current_atr = float(atr_series.loc[ts])
+        except KeyError:
+            current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
+        
+        if use_atr:
             configured_tp = entry_price + current_atr * tp_atr_mult
             configured_stop = entry_price - current_atr * sl_atr_mult
         else:
             configured_tp = entry_price * (1 + profit_target_pct / 100)
             configured_stop = entry_price * (1 - stop_loss_pct / 100)
 
-        resistance_level = entry.resistance_level if entry.resistance_level else None
-        if resistance_level and resistance_level > entry_price * 1.005:
-            take_profit = min(float(resistance_level), configured_tp * 1.5)
-        else:
+        if use_atr:
             take_profit = configured_tp
+        else:
+            resistance_level = entry.resistance_level if entry.resistance_level else None
+            if resistance_level and resistance_level > entry_price * 1.005:
+                take_profit = min(float(resistance_level), configured_tp * 1.5)
+            else:
+                take_profit = configured_tp
 
-        # Fix 2c: SL is a hard ceiling — support can only tighten, never widen it.
-        # Tighten to support * 0.999 only when that level is ABOVE the configured SL.
         support_stop    = support * 0.999
-        stop_price = max(configured_stop, support_stop) if support_stop > configured_stop else configured_stop
+        # Ensure stop_price is always below entry_price to prevent phantom wins
+        if support_stop > configured_stop and support_stop < entry_price:
+            stop_price = support_stop
+        else:
+            stop_price = configured_stop
 
         # Absolute max-loss floor (Fix 3) — always tighter than user SL when
         # the SL is smaller; prevents gap-downs from blowing past the cap.
@@ -531,17 +533,17 @@ def simulate_entry(
                 exit_ts    = fwd_ts
                 break
 
+            # Fix 1: Regular SL / trailing-stop — intrabar low touches stop
+            if float(lows[j]) <= effective_stop:
+                outcome    = "win" if effective_stop > entry_price else "loss"
+                exit_price = min(float(opens[j]), effective_stop)
+                exit_ts    = fwd_ts
+                break
+
             # Fix 4: Take-profit — intrabar high touches TP
             if float(highs[j]) >= take_profit:
                 outcome    = "win"
                 exit_price = take_profit
-                exit_ts    = fwd_ts
-                break
-
-            # Fix 1: Regular SL / trailing-stop — intrabar low touches stop
-            if float(lows[j]) <= effective_stop:
-                outcome    = "win" if effective_stop > entry_price else "loss"
-                exit_price = effective_stop
                 exit_ts    = fwd_ts
                 break
 
@@ -580,6 +582,7 @@ def simulate_entry(
             pattern_type=p_type,
             bars_since_pattern=bars_since_pat,
             entry_attempt=entry_attempt,
+            atr=current_atr,
         ))
 
         # ── Fix 4: consecutive-loss tracking and cooldown ─────────────────
@@ -939,53 +942,9 @@ def _fetch_spy_benchmark(start_date: str, end_date: str) -> Optional[float]:
     Fetch SPY daily bars and return the buy-and-hold return % from start to end.
     Returns None if data is unavailable.
 
-    Guarantees at least a 5-calendar-day window so weekend-only ranges don't
-    produce empty results.  Uses Schwab Market Data API with yfinance fallback.
+    BYPASSED for speed in backtesting.
     """
-    from datetime import datetime as _dt, timedelta as _td
-    from side_by_side_backtest.data_fetcher import _fetch_schwab_daily, _silence_yfinance
-
-    try:
-        # Ensure the window spans at least 5 calendar days (covers Mon–Fri).
-        start_dt = _dt.fromisoformat(start_date)
-        end_dt   = _dt.fromisoformat(end_date)
-        if (end_dt - start_dt).days < 5:
-            end_dt = start_dt + _td(days=5)
-
-        start_s = start_dt.strftime("%Y-%m-%d")
-        end_s   = end_dt.strftime("%Y-%m-%d")
-
-        # Primary: Schwab daily bars
-        spy = pd.DataFrame()
-        try:
-            spy = _fetch_schwab_daily("SPY", start_s, end_s)
-        except Exception as schwab_exc:
-            print(f"[simulator] Schwab SPY fetch failed ({schwab_exc}), falling back to yfinance")
-
-        # Fallback: yfinance
-        if spy.empty:
-            import yfinance as yf
-            with _silence_yfinance():
-                raw = yf.download(
-                    "SPY", start=start_s, end=end_s,
-                    interval="1d", progress=False, auto_adjust=True, threads=False,
-                )
-            if not raw.empty:
-                close_col = ("Close", "SPY") if isinstance(raw.columns, pd.MultiIndex) else "Close"
-                spy = raw[[close_col]].rename(columns={close_col: "close"})
-
-        if spy.empty or len(spy) < 2:
-            return None
-
-        close = spy["close"] if "close" in spy.columns else spy.iloc[:, 0]
-        start_price = float(close.iloc[0])
-        end_price   = float(close.iloc[-1])
-        if start_price <= 0:
-            return None
-        return (end_price / start_price - 1) * 100
-    except Exception as exc:
-        print(f"[simulator] WARNING: SPY benchmark fetch failed: {exc}")
-        return None
+    return None
 
 
 def _simulate_one_entry(

@@ -121,7 +121,13 @@ class DecisionEngine:
                                   reason=f"[{sname}] No valid entry price")
 
         # ── All gates passed ──────────────────────────────────────────────
-        quantity    = max(1, int(self._strategy.trade_size // entry_price))
+        # Sizing Mode (Phase 6)
+        if getattr(self._strategy, "size_mode", "flat") == "atr" and getattr(setup_score, "atr", 0.0) > 0:
+            stop_dist = setup_score.atr * getattr(self._strategy, "sl_atr_mult", 1.5)
+            quantity = max(1, int(self._strategy.risk_budget // stop_dist))
+        else:
+            quantity    = max(1, int(self._strategy.trade_size // entry_price))
+            
         limit_price = round(entry_price * (1 + self._strategy.entry_limit_slippage), 4)
 
         return DecisionResult(

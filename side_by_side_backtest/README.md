@@ -437,80 +437,33 @@ side_by_side_backtest/
 
 ---
 
-## 🤖 Autonomous Trading System
+## 🤖 Autonomous Trading System (v4 - Institutional)
 
-A fully closed-loop execution pipeline that watches the live scanner, applies circuit breakers, opens and manages positions automatically, and records real fills in a separate `actual_trades` table.
+A fully closed-loop, institutional-grade execution pipeline that wires together advanced risk management, volume constraints, and smart order routing. Operates via `live_scanner.py --autonomous`.
 
-### 1-Minute Heartbeat & Schwab Integration
-- **Heartbeat:** The system evaluates trades, refreshes prices, and monitors positions on a strict **1-minute synchronized heartbeat**.
-- **Real-Time Quotes:** Integrated with the **Schwab Market Data API** (`/quotes`) to fetch real-time pricing for accurate entry execution and exit tracking.
-- **Trading Windows:** Only executes during Market Open and Postmarket hours (Monday-Friday, 9:30 AM – 8:00 PM ET).
+### ⚙️ Core Infrastructure (Phases 1 – 6)
+- **Heartbeat (5-Min Aligned)**: Evaluates entries *only* on completed 5-minute candle closes, eliminating mid-bar noise and false support touches.
+- **Volatility Sizing (Phase 1)**: Implements **ATR Risk Normalization** (`size_mode = "atr"`). Shares are calculated dynamically based on a fixed dollar risk budget and the ATR stop distance: `Size = Risk_Budget / (1.5 × ATR)`.
+- **Liquidity Gate (Phase 2)**: Defeats the "lumpy volume" kurtosis problem in microcaps using a **Median-based Time-of-Day (TOD) Volume Profile**. Caps order size at **2% of the 20-day median volume** for the current 5-minute bucket to prevent market impact.
+- **Dynamic Brackets (Phase 3)**: Bypasses static targets and enforces **Dynamic ATR Multipliers** (`SL = 1.5 × ATR`, `TP = 3.0 × ATR`) to let alpha breathe.
+- **Gap Management (Phase 3)**: Traps overnight gap risk. If a stock opens below the Stop-Loss, the system immediately routes an emergency market sell at the `Open` and logs the true slippage.
+- **Slicing & OCO Sync (Phase 4)**: The `SlicingEngine` splits large orders into chunks (Iceberg/TWAP) worked passively at the NBBO. The **Master Bracket Controller** dynamically scales up the Schwab-side OCO (bracket) quantity in real-time as chunk fills settle, eliminating "phantom stop" risk.
 
-### Configuration — `autonomous_config.py`
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `budget_total` | $2,000 | Ring-fenced capital for autonomous trading |
-| `trade_size` | $500 | Flat dollar size per trade |
-| `daily_loss_halt` | $300 | Stop all trading if daily PnL < −$300 |
-| `trailing_activate_pct` | 0.5% | Profit level before high-water trailing starts |
-| `momentum_fade_pct` | 0.3% | Retreat from high-water → early exit |
-| `paper_mode` | `True` | No real orders until flipped to `False` |
-
-### Safety Controls (Dashboard)
-Access the **📊 Autonomous PnL** sidebar for operational gates:
-- **Tunable SP/SL:** Real-time sliders to override target/stop default metrics.
-- **Kill Switch:** Instant auto-trader cessation triggers.
-- **Manual Sell:** Immediate market order liquidation shortcuts.
-
-### Run Paper Trading
-
-```bash
-python -m side_by_side_backtest.live_scanner \
-  --watchlist scraped_watchlists.json \
-  --autonomous
-```
-
-Paper trades appear in `actual_trades` table (`source='paper'`). View them on the **🤖 Autonomous PnL** page.
-
-### Go Live (after Schwab API approval)
-
-1. Register at **developer.schwab.com** → create app → callback URL `https://127.0.0.1`
-2. Add credentials to `.env`:
-   ```
-   SCHWAB_CLIENT_ID=your_client_id
-   SCHWAB_CLIENT_SECRET=your_client_secret
-   SCHWAB_ACCOUNT_HASH=your_account_hash
-   ```
-3. First-time OAuth consent:
-   ```bash
-   python -m side_by_side_backtest.schwab_broker --auth
-   ```
-4. Flip `paper_mode = False` in `autonomous_config.py`
-
-### Exit Logic
-
-| Exit Type | Trigger |
-|-----------|---------|
-| **Take-Profit** | Close or Quote ≥ entry × (1 + PT%) |
-| **Stop-Loss** | Close or Quote ≤ entry × (1 − SL%) |
-| **Momentum Fade** | Close retreats > 0.3% from high-water (activates after 0.5% gain) OR MACD histogram falling 2 bars while profitable |
-| **Time Stop** | Session close 4:00 PM ET |
+### 🎛️ Strategy Configuration — `autonomous_config.py`
+The system runs both strategies in parallel, hardcoded with their **validated, unbiased champion parameters**:
+- **Card Strategy (Champion 🏆)**: `min_score = 4.3`, `size_mode = "atr"`, `risk_budget = $20.00`, `use_atr = True`, `enable_slicing = True`, `liquidity_participation = 0.02`, `use_resistance_as_tp = False`.
+- **Backtest Strategy (Anchor 📊)**: `min_score = 0.0` (pattern-only), `size_mode = "atr"`, `risk_budget = $10.00`, `use_atr = True`, `enable_slicing = False`, `liquidity_participation = 0.02`.
 
 ---
 
-## 📊 Autonomous PnL Page
+## 🤖 Autonomous PnL Dashboard (Upgraded)
 
 Open **http://localhost:8501** → **🤖 Autonomous PnL**
 
-| Section | Description |
-|---------|-------------|
-| **Summary metrics** | Total PnL $, Win Rate, Expectancy $/trade, Trade count, Sharpe |
-| **Equity curve** | Cumulative dollar PnL chart, paper vs live overlaid |
-| **Drawdown** | Peak-to-trough running drawdown chart |
-| **Open positions** | All currently open autonomous positions |
-| **Trade log** | All closed trades with entry/exit times, PnL, exit reason |
-| **Per-ticker summary** | Win rate + total PnL grouped by ticker |
+The dashboard runs a live 60-second refresh fragment. The **🔓 Open Positions** panel has been upgraded to expose the active institutional execution state:
+*   **TOD Cap**: Displays the maximum shares allowed by the Phase 2 Liquidity Gate for the current time bucket.
+*   **OCO Status**: Displays the active OCO Bracket ID currently working at Schwab (rendered as `paper-oco-TICKER` in paper mode).
+*   **ATR Entry**: Displays the locked-in ATR value captured at the exact moment of fill for sizing auditability.
 
 ---
 

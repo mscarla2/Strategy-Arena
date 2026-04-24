@@ -312,7 +312,8 @@ class PositionMonitor:
                             quantity: int, setup_score: float,
                             pt_pct: float, sl_pct: float,
                             session_type: str = "unknown",
-                            strategy_name: str = "backtest_strategy") -> int:
+                            strategy_name: str = "backtest_strategy",
+                            atr: float = 0.0) -> int:
         """
         Record a new paper trade entry in actual_trades.
         Returns the DB row_id for subsequent exit update.
@@ -332,6 +333,7 @@ class PositionMonitor:
             "pt_pct":        pt_pct,
             "sl_pct":        sl_pct,
             "session_type":  session_type,
+            "atr":           atr,
         })
         logger.info(
             f"[position_monitor] OPEN {ticker} [{strategy_name}]  "

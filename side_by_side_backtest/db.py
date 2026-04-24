@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS actual_trades (
     pt_pct          REAL    NOT NULL DEFAULT 0.0,
     sl_pct          REAL    NOT NULL DEFAULT 0.0,
     session_type    TEXT    NOT NULL DEFAULT 'unknown',
+    atr             REAL    NOT NULL DEFAULT 0.0,
 
     UNIQUE(ticker, entry_ts, source, strategy_name)
 );
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS actual_trades (
 # Migration: add strategy_name column to existing actual_trades tables
 _ACTUAL_TRADES_MIGRATION = [
     "ALTER TABLE actual_trades ADD COLUMN strategy_name TEXT NOT NULL DEFAULT 'backtest'",
+    "ALTER TABLE actual_trades ADD COLUMN atr REAL NOT NULL DEFAULT 0.0",
 ]
 
 # Migration: add analysis-tag columns to existing databases that pre-date Phase A.
@@ -340,8 +342,8 @@ class WatchlistDB:
                 (ticker, source, strategy_name, setup_score,
                  entry_ts, entry_price, quantity,
                  order_id, exit_ts, exit_price, exit_reason,
-                 pnl_dollar, pnl_pct, outcome, pt_pct, sl_pct, session_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pnl_dollar, pnl_pct, outcome, pt_pct, sl_pct, session_type, atr)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("ticker", ""),
@@ -361,6 +363,7 @@ class WatchlistDB:
                 trade.get("pt_pct", 0.0),
                 trade.get("sl_pct", 0.0),
                 trade.get("session_type", "unknown"),
+                trade.get("atr", 0.0),
             ),
         )
         self.conn.commit()

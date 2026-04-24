@@ -55,9 +55,17 @@ class StrategyConfig:
     max_hold_days:  int   = 1       # force exit after N calendar days (0 = no limit)
 
     # ── Exit — momentum fade ─────────────────────────────────────────────────
-    trailing_activate_pct: float = 0.5
-    momentum_fade_pct:     float = 0.3
     macd_fade_bars:        int   = 2
+
+    # ── Phase 6: Advanced Execution & Sizing ─────────────────────────────────
+    use_atr:                    bool  = True    # Use ATR-based brackets
+    tp_atr_mult:                float = 3.0     # TP = 3.0x ATR
+    sl_atr_mult:                float = 1.5     # SL = 1.5x ATR
+    enable_slicing:             bool  = False   # Enable Iceberg/TWAP slicing
+    max_slice_shares:           int   = 1000    # Max shares per slice
+    liquidity_participation:    float = 0.02    # Max 2% of TOD volume
+    size_mode:                  str   = "flat"  # 'flat' | 'atr'
+    risk_budget:                float = 10.0    # $ risk per trade if size_mode='atr'
 
 
 @dataclass
@@ -67,26 +75,36 @@ class AutonomousConfig:
     # ── Strategies ────────────────────────────────────────────────────────────
     card_strategy: StrategyConfig = field(default_factory=lambda: StrategyConfig(
         name="card_strategy",
-        display_name="📋 Card Strategy (score ≥ 4.0 + support touch)",
-        budget_total=5_000.0,       # $1,000/trade × 5 concurrent
-        trade_size=1_000.0,
-        min_score=4.0,
-        require_support_touch=True,  # price must be near support to enter
+        display_name="📋 Card Strategy (score ≥ 4.3 + ATR Sizing)",
+        budget_total=5_000.0,       # $5,000 total allocated
+        min_score=4.3,              # Validated champion threshold
+        require_support_touch=True, # Price must be near support
         daily_loss_halt=300.0,
-        default_sl_pct=1.0,          # 1% SL
-        use_resistance_as_tp=True,   # TP = SetupScore.resistance (computed S/R level)
-        use_computed_sl=False,       # SL = flat 1% (not SetupScore.stop)
+        use_atr=True,               # Phase 3: Active ATR Brackets
+        tp_atr_mult=3.0,            # 3.0x ATR Target
+        sl_atr_mult=1.5,            # 1.5x ATR Stop
+        enable_slicing=True,        # Phase 4: Active execution slicing
+        max_slice_shares=1000,
+        liquidity_participation=0.02, # Phase 2: 2% TOD Liquidity Gate
+        size_mode="atr",            # Phase 1: Volatility-Adjusted Sizing
+        risk_budget=20.0,           # $20 risk per trade (High confidence)
+        use_resistance_as_tp=False, # Bypass rigid watchlist levels
     ))
 
     backtest_strategy: StrategyConfig = field(default_factory=lambda: StrategyConfig(
         name="backtest_strategy",
-        display_name="📊 Backtest Strategy (pattern only)",
-        budget_total=1_000.0,   # $100/trade × 10 concurrent pattern setups
-        trade_size=100.0,
-        min_score=0.0,          # no score gate — pure pattern + support touch
+        display_name="📊 Backtest Strategy (pattern only + ATR Sizing)",
+        budget_total=1_000.0,       # $1,000 total allocated
+        min_score=0.0,              # No score gate — pure pattern
         daily_loss_halt=150.0,
-        default_pt_pct=3.75,    # 3.75% TP
-        default_sl_pct=1.0,     # 1% SL
+        use_atr=True,               # Phase 3: Active ATR Brackets
+        tp_atr_mult=3.0,            # 3.0x ATR Target
+        sl_atr_mult=1.5,            # 1.5x ATR Stop
+        enable_slicing=False,       # Slicing inactive (smaller sizes)
+        liquidity_participation=0.02, # Phase 2: 2% TOD Liquidity Gate
+        size_mode="atr",            # Phase 1: Volatility-Adjusted Sizing
+        risk_budget=10.0,           # $10 risk per trade (Conservative)
+        use_resistance_as_tp=False, # Bypass rigid watchlist levels
     ))
 
     # ── Shared settings ───────────────────────────────────────────────────────

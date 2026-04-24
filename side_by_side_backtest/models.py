@@ -113,6 +113,9 @@ class TradeResult(BaseModel):
     # 1 = first touch of session, 2 = second touch, etc.
     entry_attempt: int = 1
 
+    # ATR at entry time for position sizing and dynamic brackets
+    atr: float = 0.0
+
 
 class BacktestSummary(BaseModel):
     """Aggregated performance for one (profit_target_pct, stop_loss_pct) combination."""

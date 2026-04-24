@@ -34,7 +34,7 @@ import pandas as pd
 _PKG = Path(__file__).parent
 _DEFAULT_JSON  = _PKG.parent / "scraped_watchlists.json"
 _POLL_INTERVAL = 60           # seconds between full scans (entry attempts + position checks)
-_TOUCH_BAND    = 0.005        # body within 0.5% of support = "touched" (body-based, not wick)
+_TOUCH_BAND    = 0.02         # body within 2.0% of support = "touched" (body-based, not wick)
 _PATTERN_BARS  = 30           # last N bars to check for the pattern
 _HEARTBEAT_FILE = _PKG / ".scanner_heartbeat.json"   # written after every scan pass
 
@@ -193,6 +193,7 @@ def _check_ticker(entry, quote: dict = None) -> Optional[object]:
                 print(f"[scanner] {entry.ticker} using Schwab quote price: ${q_price:.3f}")
             else:
                 sc._current_market_price = float(bars["close"].iloc[-1])
+            sc._bars = bars
         return sc
     except Exception:
         return None
@@ -336,6 +337,8 @@ def _execute_for_strategy_inner(sc, monitor, engine, strategy_cfg, master_cfg) -
         # Card: score ≥ min_score AND price within touch_band of support
         if sc.score < strategy_cfg.min_score:
             return
+        if not getattr(sc, "support_ok", True):
+            return
         if getattr(strategy_cfg, "require_support_touch", False):
             if sc.support and sc.support > 0:
                 touch_dist = abs(current_mkt_price - sc.support) / sc.support
@@ -350,6 +353,25 @@ def _execute_for_strategy_inner(sc, monitor, engine, strategy_cfg, master_cfg) -
         # Backtest: requires support touch + pattern
         if sc.pattern_score <= 0:
             return
+            
+        if not getattr(sc, "support_ok", True):
+            return
+            
+        # Enforce strict support touch (2-bar state machine)
+        bars = getattr(sc, "_bars", None)
+        if bars is not None and len(bars) >= 2:
+            bar_N = bars.iloc[-2]
+            bar_Nplus1 = bars.iloc[-1]
+            
+            body_low_N = min(float(bar_N["open"]), float(bar_N["close"]))
+            close_Nplus1 = float(bar_Nplus1["close"])
+            
+            support = getattr(sc, "support", 0.0)
+            if support and support > 0:
+                if not (body_low_N <= support * 1.02):
+                    return
+                if not (close_Nplus1 >= support * 0.90):
+                    return
 
     decision = engine.evaluate(sc, current_price=current_mkt_price)
     if not decision.go:
@@ -415,64 +437,125 @@ def _execute_for_strategy_inner(sc, monitor, engine, strategy_cfg, master_cfg) -
     _FILL_POLL_INTERVAL = 2   # seconds between status checks
     _FILL_TIMEOUT_SEC   = 30  # cancel after this many seconds without a fill
 
-    actual_entry_price = decision.limit_price or sc.entry_price  # default; overridden by fill price
-    entry_ts = datetime.now(tz=timezone.utc)  # fallback for paper mode; overwritten on live fill
+    # Phase 2: Volume Constraints (Liquidity Gate)
+    from .smart_execution import VolumeLiquidityGate
+    bars = getattr(sc, "_bars", None)
+    vol_matrix = {}
+    if bars is not None and not bars.empty:
+        profile = {}
+        for ts, row in bars.iterrows():
+            bucket = ts.strftime("%H:%M")
+            if bucket not in profile:
+                profile[bucket] = []
+            profile[bucket].append(float(row["volume"]))
+        vol_matrix[sc.ticker] = profile
 
-    if not master_cfg.paper_mode:
-        from .schwab_broker import SchwabBroker
-        broker = SchwabBroker(master_cfg)
-        order  = broker.place_order(
+    gate = VolumeLiquidityGate(vol_matrix, participation_rate=getattr(strategy_cfg, "liquidity_participation", 0.02))
+    final_qty, is_constrained = gate.constrain_size(decision.quantity, sc.ticker, datetime.now())
+
+    if final_qty <= 0:
+        print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — skip: Liquidity Gate constrained size to 0{_RESET}")
+        return
+
+    if is_constrained:
+        print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — Volume Constrained: {decision.quantity} → {final_qty}{_RESET}")
+
+    # Phase 3 & 6: Brackets Resolution
+    if getattr(strategy_cfg, "use_atr", True) and getattr(sc, "atr", 0.0) > 0:
+        pt_price = current_mkt_price + sc.atr * getattr(strategy_cfg, "tp_atr_mult", 3.0)
+        sl_price = current_mkt_price - sc.atr * getattr(strategy_cfg, "sl_atr_mult", 1.5)
+    else:
+        pt_price = current_mkt_price * (1 + pt_pct / 100)
+        sl_price = current_mkt_price * (1 - sl_pct / 100)
+
+    actual_entry_price = decision.limit_price or current_mkt_price
+    entry_ts = datetime.now(tz=timezone.utc)
+    filled_qty = 0
+
+    from .schwab_broker import SchwabBroker
+    broker = SchwabBroker(master_cfg)
+
+    if getattr(strategy_cfg, "enable_slicing", False):
+        from .smart_execution import SlicingEngine, MasterBracketController
+
+        bracket_ctrl = MasterBracketController(broker, sc.ticker, actual_entry_price, pt_price, sl_price)
+        slicer = SlicingEngine(
+            broker=broker,
+            ticker=sc.ticker,
+            total_qty=final_qty,
+            limit_price=decision.limit_price or current_mkt_price,
+            max_chunk_shares=getattr(strategy_cfg, "max_slice_shares", 1000),
+            interval_secs=30
+        )
+
+        print(f"{_GREEN}{mode_tag}[{sname}] Starting Sliced Execution for {final_qty} shares...{_RESET}")
+        filled_qty = slicer.execute_slicing(on_fill_callback=bracket_ctrl.sync_bracket)
+
+        if filled_qty <= 0:
+            print(f"{_RED}{mode_tag}[{sname}] {sc.ticker} — Slicing failed to fill any shares.{_RESET}")
+            return
+
+        final_qty = filled_qty
+        entry_ts = datetime.now(tz=timezone.utc)
+    else:
+        # Single Order + OCO Bracket
+        order = broker.place_order(
             ticker=sc.ticker,
             side="buy",
-            quantity=decision.quantity,
-            limit_price=decision.limit_price,
+            quantity=final_qty,
+            limit_price=decision.limit_price or current_mkt_price,
         )
-        if order.status == "error":
-            print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — order REJECTED by Schwab "
-                  f"(status={order.status}): {order.message}{_RESET}")
-            return  # do NOT write to DB
 
-        if order.status == "pending" and order.order_id:
-            # Poll until filled or timeout
+        if order.status == "error":
+            print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — order REJECTED: {order.message}{_RESET}")
+            return
+
+        if order.status in ("filled", "paper"):
+            filled_qty = final_qty
+            actual_entry_price = order.fill_price or actual_entry_price
+            entry_ts = datetime.now(tz=timezone.utc)
+        elif order.status == "pending" and order.order_id:
+            _FILL_POLL_INTERVAL = 2
+            _FILL_TIMEOUT_SEC = 30
             deadline = time.time() + _FILL_TIMEOUT_SEC
-            filled_order = None
             while time.time() < deadline:
                 time.sleep(_FILL_POLL_INTERVAL)
                 status = broker.get_order_status(order.order_id)
                 if status.status == "filled":
-                    filled_order = status
+                    filled_qty = final_qty
+                    actual_entry_price = status.fill_price or actual_entry_price
+                    entry_ts = datetime.now(tz=timezone.utc)
                     break
                 if status.status in ("cancelled", "error"):
-                    print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — order {status.status} "
-                          f"before fill, skipping DB write{_RESET}")
-                    return
+                    break
 
-            if filled_order is None:
-                # Timeout — cancel the unfilled order
+            if filled_qty <= 0:
+                print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — Fill TIMEOUT. Cancelling order.{_RESET}")
                 broker.cancel_order(order.order_id)
-                print(f"{_YELLOW}{mode_tag}[{sname}] {sc.ticker} — limit order NOT filled "
-                      f"within {_FILL_TIMEOUT_SEC}s, cancelled{_RESET}")
-                return  # do NOT write to DB
+                return
 
-            # Capture fill timestamp NOW — after confirmed fill.
-            # This is the correct entry_ts for the position monitor's post_entry
-            # bar filter; using order-submission time would include pre-fill bars.
-            entry_ts = datetime.now(tz=timezone.utc)
+        # Deploy OCO Bracket
+        try:
+            broker.place_oco(sc.ticker, filled_qty, pt_price, sl_price)
+            print(f"{_GREEN}{mode_tag}[{sname}] Deployed OCO Bracket for {filled_qty} shares.{_RESET}")
+        except Exception as e:
+            print(f"{_RED}{mode_tag}[{sname}] Failed to deploy OCO: {e}{_RESET}")
 
-            # Use actual fill price if available
-            if filled_order.fill_price and filled_order.fill_price > 0:
-                actual_entry_price = filled_order.fill_price
+    # Recalculate percentages for DB record based on actual entry price
+    pt_pct_db = ((pt_price / actual_entry_price) - 1) * 100
+    sl_pct_db = (1 - (sl_price / actual_entry_price)) * 100
 
     monitor.open_paper_position(
         ticker=sc.ticker,
         entry_ts=entry_ts,
         entry_price=actual_entry_price,
-        quantity=decision.quantity,
+        quantity=final_qty,
         setup_score=sc.score,
-        pt_pct=pt_pct,
-        sl_pct=sl_pct,
+        pt_pct=pt_pct_db,
+        sl_pct=sl_pct_db,
         session_type=getattr(sc, "session_type", "unknown"),
         strategy_name=sname,
+        atr=getattr(sc, "atr", 0.0),
     )
 
     # Cooldown is now DB-backed via _is_on_cooldown() — no in-process dict needed
@@ -732,11 +815,23 @@ def run_loop(json_path: str, interval: int, autonomous: bool = False) -> None:
         print(f"[scanner] Fast position monitor started — polling every {_POSITION_POLL_INTERVAL}s")
 
     mode = "AUTONOMOUS" if autonomous else "alert-only"
-    print(f"[scanner] Starting live scan ({mode}) — interval {interval}s — Ctrl+C to stop")
+    print(f"[scanner] Starting live scan ({mode}) — 5-min aligned heartbeat — Ctrl+C to stop")
     try:
+        # Align with 5-minute boundary initially
+        now = time.time()
+        time_to_sleep = 300 - (now % 300)
+        if time_to_sleep > 0:
+            print(f"[scanner] Aligning with 5-minute boundary... sleeping {time_to_sleep:.1f}s")
+            time.sleep(time_to_sleep)
+            
         while True:
             scan_once(json_path, autonomous=autonomous)
-            time.sleep(interval)
+            
+            now = time.time()
+            time_to_sleep = 300 - (now % 300)
+            if time_to_sleep < 10:  # safety buffer
+                time_to_sleep += 300
+            time.sleep(time_to_sleep)
     except KeyboardInterrupt:
         print("\n[scanner] Stopped.")
 

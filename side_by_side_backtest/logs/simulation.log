@@ -14197,3 +14197,255 @@
 2026-04-23 10:57:42    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+17.61%
 2026-04-23 10:57:42  [simulator] END — 6 trades / 12 entries (0 skipped/deduped, 16 filtered)  cum_pnl=+17.61%  spy_bh=-0.66%  (2026-04-23 → 2026-04-24)
 2026-04-23 10:57:42  [simulator] Log written → /Users/me/Developer/Strategy Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 19:29:11  [simulator] START — 12 entries  TP=5.0%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 19:29:23    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 19:29:23    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 19:29:23    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 19:29:23    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 19:29:23    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 19:29:23    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 19:29:23    [FILTERED] MEHA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] MEHA   attempt=2  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] MEHA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] MEHA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] MEHA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] CGC    attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] CGC    attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=-0.10%
+2026-04-23 19:29:23    [FILTERED] AKAN   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [LOSS   ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.8551  pnl=-1.00%  bars=1  support_ok=True  cum=-1.10%
+2026-04-23 19:29:23    [FILTERED] ANNA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] AKAN   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=-0.03%
+2026-04-23 19:29:23    [FILTERED] AKAN   attempt=3  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] ANNA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] AKAN   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] ANNA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] ANNA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] PAPL   attempt=8  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] ANNA   attempt=6  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+0.72%
+2026-04-23 19:29:23    [FILTERED] PAPL   attempt=9  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] AKAN   attempt=6  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [FILTERED] AKAN   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:29:23    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+3.51%
+2026-04-23 19:29:23    [LOSS   ] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3560  pnl=-1.00%  bars=1  support_ok=True  cum=+2.48%
+2026-04-23 19:29:23    [TIMEOUT] ANNA   attempt=8  src=computed  pat=exhaustion(+3b)  entry=4.3232  exit=4.3150  pnl=-0.19%  bars=9  support_ok=True  cum=+2.28%
+2026-04-23 19:29:23  [simulator] END — 7 trades / 12 entries (0 skipped/deduped, 20 filtered)  cum_pnl=+2.28%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 19:29:23  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 19:31:06  [simulator] START — 12 entries  TP=3.75%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 19:31:19    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 19:31:19    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 19:31:19    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 19:31:19    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 19:31:19    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 19:31:19    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 19:31:19    [FILTERED] MEHA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] MEHA   attempt=2  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] MEHA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] MEHA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] MEHA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] CGC    attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] CGC    attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=-0.10%
+2026-04-23 19:31:19    [FILTERED] AKAN   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [WIN    ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.9000  pnl=+4.20%  bars=4  support_ok=True  cum=+4.10%
+2026-04-23 19:31:19    [FILTERED] ANNA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] AKAN   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=+5.23%
+2026-04-23 19:31:19    [FILTERED] AKAN   attempt=3  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] ANNA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] AKAN   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] ANNA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] ANNA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] PAPL   attempt=8  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] ANNA   attempt=6  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+6.01%
+2026-04-23 19:31:19    [FILTERED] PAPL   attempt=9  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] AKAN   attempt=6  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [FILTERED] AKAN   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:19    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+8.95%
+2026-04-23 19:31:19    [TIMEOUT] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3150  pnl=-1.93%  bars=18  support_ok=True  cum=+6.85%
+2026-04-23 19:31:19  [simulator] END — 6 trades / 12 entries (0 skipped/deduped, 20 filtered)  cum_pnl=+6.85%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 19:31:19  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 19:31:35  [simulator] START — 12 entries  TP=3.75%  SL=0.12%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 19:31:47    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 19:31:47    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 19:31:47    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 19:31:47    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 19:31:47    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 19:31:47    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 19:31:47    [FILTERED] MEHA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] MEHA   attempt=2  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] MEHA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] MEHA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] MEHA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] CGC    attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] CGC    attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=-0.10%
+2026-04-23 19:31:47    [FILTERED] AKAN   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [WIN    ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.9000  pnl=+4.20%  bars=4  support_ok=True  cum=+4.10%
+2026-04-23 19:31:47    [FILTERED] ANNA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] AKAN   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=+5.23%
+2026-04-23 19:31:47    [FILTERED] AKAN   attempt=3  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] ANNA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] AKAN   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] ANNA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] ANNA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] PAPL   attempt=8  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] ANNA   attempt=6  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+6.01%
+2026-04-23 19:31:47    [FILTERED] PAPL   attempt=9  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] AKAN   attempt=6  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [FILTERED] AKAN   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:31:47    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+8.95%
+2026-04-23 19:31:47    [TIMEOUT] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3150  pnl=-1.93%  bars=18  support_ok=True  cum=+6.85%
+2026-04-23 19:31:47  [simulator] END — 6 trades / 12 entries (0 skipped/deduped, 20 filtered)  cum_pnl=+6.85%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 19:31:47  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 19:31:59  [simulator] START — 12 entries  TP=3.75%  SL=0.12%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 19:33:19  [simulator] START — 12 entries  TP=5.0%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 19:33:31    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 19:33:31    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 19:33:31    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 19:33:31    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 19:33:31    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 19:33:31    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 19:33:31    [FILTERED] MEHA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] MEHA   attempt=2  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] MEHA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] MEHA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] MEHA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] CGC    attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] CGC    attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=-0.10%
+2026-04-23 19:33:31    [FILTERED] AKAN   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [WIN    ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.9000  pnl=+4.20%  bars=4  support_ok=True  cum=+4.10%
+2026-04-23 19:33:31    [FILTERED] ANNA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] AKAN   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=+5.23%
+2026-04-23 19:33:31    [FILTERED] AKAN   attempt=3  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] ANNA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] AKAN   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] ANNA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] ANNA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] PAPL   attempt=8  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] ANNA   attempt=6  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+6.01%
+2026-04-23 19:33:31    [FILTERED] PAPL   attempt=9  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] AKAN   attempt=6  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [FILTERED] AKAN   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 19:33:31    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+8.95%
+2026-04-23 19:33:31    [TIMEOUT] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3100  pnl=-2.05%  bars=19  support_ok=True  cum=+6.73%
+2026-04-23 19:33:31  [simulator] END — 6 trades / 12 entries (0 skipped/deduped, 20 filtered)  cum_pnl=+6.73%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 19:33:31  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 19:36:16  [simulator] START — 12 entries  TP=5.0%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 19:36:28    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 19:36:28    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 19:36:28    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 19:36:28    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 19:36:28    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 19:36:28    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 19:36:28    [WIN    ] MEHA   attempt=1  src=computed  pat=exhaustion(+0b)  entry=0.1571  exit=0.1644  pnl=+4.67%  bars=1  support_ok=False  cum=+4.67%
+2026-04-23 19:36:28    [WIN    ] MEHA   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.1585  exit=0.1644  pnl=+3.74%  bars=1  support_ok=False  cum=+8.59%
+2026-04-23 19:36:28    [WIN    ] MEHA   attempt=3  src=computed  pat=exhaustion(+0b)  entry=0.1559  exit=0.1644  pnl=+5.47%  bars=1  support_ok=False  cum=+14.53%
+2026-04-23 19:36:28    [WIN    ] MEHA   attempt=4  src=computed  pat=exhaustion(+3b)  entry=0.1596  exit=0.1644  pnl=+3.03%  bars=1  support_ok=False  cum=+18.00%
+2026-04-23 19:36:28    [LOSS   ] MEHA   attempt=5  src=computed  pat=exhaustion(+1b)  entry=0.1577  exit=0.1474  pnl=-6.53%  bars=1  support_ok=False  cum=+10.30%
+2026-04-23 19:36:28    [WIN    ] CGC    attempt=1  src=watchlist  pat=exhaustion(+0b)  entry=1.3469  exit=1.3986  pnl=+3.84%  bars=1  support_ok=False  cum=+14.53%
+2026-04-23 19:36:28    [WIN    ] CGC    attempt=2  src=watchlist  pat=exhaustion(+4b)  entry=1.3899  exit=1.3986  pnl=+0.63%  bars=1  support_ok=False  cum=+15.25%
+2026-04-23 19:36:28    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=+15.13%
+2026-04-23 19:36:28    [LOSS   ] AKAN   attempt=1  src=watchlist  pat=exhaustion(+0b)  entry=12.7997  exit=12.1597  pnl=-5.00%  bars=1  support_ok=False  cum=+9.38%
+2026-04-23 19:36:28    [LOSS   ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.8551  pnl=-1.00%  bars=1  support_ok=True  cum=+8.28%
+2026-04-23 19:36:28    [WIN    ] ANNA   attempt=1  src=computed  pat=strict(+0b)  entry=4.1700  exit=4.2182  pnl=+1.16%  bars=1  support_ok=False  cum=+9.53%
+2026-04-23 19:36:28    [WIN    ] AKAN   attempt=2  src=watchlist  pat=exhaustion(+3b)  entry=11.7400  exit=13.0469  pnl=+11.13%  bars=1  support_ok=False  cum=+21.73%
+2026-04-23 19:36:28    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=+23.04%
+2026-04-23 19:36:28    [WIN    ] AKAN   attempt=3  src=watchlist  pat=exhaustion(+7b)  entry=12.8000  exit=13.0469  pnl=+1.93%  bars=1  support_ok=False  cum=+25.42%
+2026-04-23 19:36:28    [WIN    ] ANNA   attempt=3  src=computed  pat=strict(+8b)  entry=4.1500  exit=4.2182  pnl=+1.64%  bars=1  support_ok=False  cum=+27.48%
+2026-04-23 19:36:28    [LOSS   ] AKAN   attempt=4  src=watchlist  pat=exhaustion(+1b)  entry=12.3500  exit=11.7325  pnl=-5.00%  bars=1  support_ok=False  cum=+21.10%
+2026-04-23 19:36:28    [WIN    ] ANNA   attempt=4  src=computed  pat=strict(+12b)  entry=4.1220  exit=4.2182  pnl=+2.33%  bars=1  support_ok=False  cum=+23.93%
+2026-04-23 19:36:28    [WIN    ] ANNA   attempt=5  src=computed  pat=strict(+16b)  entry=4.0700  exit=4.2182  pnl=+3.64%  bars=1  support_ok=False  cum=+28.44%
+2026-04-23 19:36:28    [WIN    ] PAPL   attempt=8  src=computed  pat=exhaustion(+7b)  entry=0.7951  exit=0.8701  pnl=+9.44%  bars=1  support_ok=False  cum=+40.56%
+2026-04-23 19:36:28    [WIN    ] ANNA   attempt=6  src=computed  pat=strict(+20b)  entry=4.0499  exit=4.2182  pnl=+4.16%  bars=1  support_ok=False  cum=+46.40%
+2026-04-23 19:36:28    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+47.50%
+2026-04-23 19:36:28    [WIN    ] PAPL   attempt=9  src=computed  pat=exhaustion(+11b)  entry=0.8488  exit=0.8701  pnl=+2.51%  bars=1  support_ok=False  cum=+51.20%
+2026-04-23 19:36:28    [WIN    ] AKAN   attempt=6  src=watchlist  pat=exhaustion(+2b)  entry=12.8200  exit=13.0469  pnl=+1.77%  bars=1  support_ok=False  cum=+53.88%
+2026-04-23 19:36:28    [LOSS   ] AKAN   attempt=7  src=watchlist  pat=exhaustion(+6b)  entry=12.9000  exit=12.0900  pnl=-6.28%  bars=1  support_ok=False  cum=+44.22%
+2026-04-23 19:36:28    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+48.22%
+2026-04-23 19:36:28    [LOSS   ] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3560  pnl=-1.00%  bars=1  support_ok=True  cum=+46.74%
+2026-04-23 19:36:28    [TIMEOUT] ANNA   attempt=8  src=computed  pat=exhaustion(+3b)  entry=4.3232  exit=4.3500  pnl=+0.62%  bars=11  support_ok=True  cum=+47.65%
+2026-04-23 19:36:28  [simulator] END — 27 trades / 12 entries (0 skipped/deduped, 0 filtered)  cum_pnl=+47.65%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 19:36:28  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 20:28:02  [simulator] START — 12 entries  TP=3.75%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 20:28:13    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 20:28:13    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 20:28:13    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 20:28:13    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 20:28:13    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 20:28:13    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 20:28:14    [FILTERED] MEHA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] MEHA   attempt=2  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] MEHA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] MEHA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] MEHA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] CGC    attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] CGC    attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=-0.10%
+2026-04-23 20:28:14    [FILTERED] AKAN   attempt=1  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [LOSS   ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.8551  pnl=-1.00%  bars=1  support_ok=True  cum=-1.10%
+2026-04-23 20:28:14    [FILTERED] ANNA   attempt=1  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] AKAN   attempt=2  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=-0.03%
+2026-04-23 20:28:14    [FILTERED] AKAN   attempt=3  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] ANNA   attempt=3  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] AKAN   attempt=4  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] ANNA   attempt=4  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] ANNA   attempt=5  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] PAPL   attempt=8  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] ANNA   attempt=6  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+0.72%
+2026-04-23 20:28:14    [FILTERED] PAPL   attempt=9  src=computed  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] AKAN   attempt=6  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [FILTERED] AKAN   attempt=7  src=watchlist  support_ok=False — skipped (--require-support-ok)
+2026-04-23 20:28:14    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+3.51%
+2026-04-23 20:28:14    [LOSS   ] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3560  pnl=-1.00%  bars=1  support_ok=True  cum=+2.48%
+2026-04-23 20:28:14    [TIMEOUT] ANNA   attempt=8  src=computed  pat=exhaustion(+3b)  entry=4.3232  exit=4.3500  pnl=+0.62%  bars=16  support_ok=True  cum=+3.11%
+2026-04-23 20:28:14    [TIMEOUT] RPGL   attempt=3  src=computed  pat=exhaustion(+0b)  entry=0.8525  exit=0.8772  pnl=+2.90%  bars=3  support_ok=True  cum=+6.10%
+2026-04-23 20:28:14  [simulator] END — 8 trades / 12 entries (0 skipped/deduped, 20 filtered)  cum_pnl=+6.10%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 20:28:14  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log
+2026-04-23 20:28:18  [simulator] START — 12 entries  TP=3.75%  SL=1.0%  MAX_LOSS=5.0%  MAX_ATTEMPTS=10
+2026-04-23 20:28:29    [NO_ENTRY] AUUD   — no trigger found
+2026-04-23 20:28:30    [NO_ENTRY] TLRY   — no trigger found
+2026-04-23 20:28:30    [NO_ENTRY] VMAR   — no trigger found
+2026-04-23 20:28:30    [NO_ENTRY] OGI    — no trigger found
+2026-04-23 20:28:30    [NO_ENTRY] BNBX   — no trigger found
+2026-04-23 20:28:30    [NO_ENTRY] YCBD   — no trigger found
+2026-04-23 20:28:30    [WIN    ] MEHA   attempt=1  src=computed  pat=exhaustion(+0b)  entry=0.1571  exit=0.1630  pnl=+3.75%  bars=1  support_ok=False  cum=+3.75%
+2026-04-23 20:28:30    [WIN    ] MEHA   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.1585  exit=0.1644  pnl=+3.74%  bars=1  support_ok=False  cum=+7.64%
+2026-04-23 20:28:30    [WIN    ] MEHA   attempt=3  src=computed  pat=exhaustion(+0b)  entry=0.1559  exit=0.1644  pnl=+5.47%  bars=1  support_ok=False  cum=+13.53%
+2026-04-23 20:28:30    [WIN    ] MEHA   attempt=4  src=computed  pat=exhaustion(+3b)  entry=0.1596  exit=0.1644  pnl=+3.03%  bars=1  support_ok=False  cum=+16.97%
+2026-04-23 20:28:30    [LOSS   ] MEHA   attempt=5  src=computed  pat=exhaustion(+1b)  entry=0.1577  exit=0.1474  pnl=-6.53%  bars=1  support_ok=False  cum=+9.33%
+2026-04-23 20:28:30    [WIN    ] CGC    attempt=1  src=watchlist  pat=exhaustion(+0b)  entry=1.3469  exit=1.3986  pnl=+3.84%  bars=1  support_ok=False  cum=+13.52%
+2026-04-23 20:28:30    [WIN    ] CGC    attempt=2  src=watchlist  pat=exhaustion(+4b)  entry=1.3899  exit=1.3986  pnl=+0.63%  bars=1  support_ok=False  cum=+14.23%
+2026-04-23 20:28:30    [LOSS   ] CGC    attempt=3  src=watchlist  pat=exhaustion(+8b)  entry=1.4000  exit=1.3986  pnl=-0.10%  bars=1  support_ok=True  cum=+14.12%
+2026-04-23 20:28:30    [LOSS   ] AKAN   attempt=1  src=watchlist  pat=exhaustion(+0b)  entry=12.7997  exit=12.1597  pnl=-5.00%  bars=1  support_ok=False  cum=+8.41%
+2026-04-23 20:28:30    [LOSS   ] RPGL   attempt=1  src=computed  pat=exhaustion(+5b)  entry=0.8637  exit=0.8551  pnl=-1.00%  bars=1  support_ok=True  cum=+7.33%
+2026-04-23 20:28:30    [WIN    ] ANNA   attempt=1  src=computed  pat=strict(+0b)  entry=4.1700  exit=4.2182  pnl=+1.16%  bars=1  support_ok=False  cum=+8.57%
+2026-04-23 20:28:30    [WIN    ] AKAN   attempt=2  src=watchlist  pat=exhaustion(+3b)  entry=11.7400  exit=13.0469  pnl=+11.13%  bars=1  support_ok=False  cum=+20.66%
+2026-04-23 20:28:30    [WIN    ] ANNA   attempt=2  src=computed  pat=strict(+4b)  entry=4.1730  exit=4.2182  pnl=+1.08%  bars=1  support_ok=True  cum=+21.96%
+2026-04-23 20:28:30    [WIN    ] AKAN   attempt=3  src=watchlist  pat=exhaustion(+7b)  entry=12.8000  exit=13.0469  pnl=+1.93%  bars=1  support_ok=False  cum=+24.32%
+2026-04-23 20:28:30    [WIN    ] ANNA   attempt=3  src=computed  pat=strict(+8b)  entry=4.1500  exit=4.2182  pnl=+1.64%  bars=1  support_ok=False  cum=+26.36%
+2026-04-23 20:28:30    [LOSS   ] AKAN   attempt=4  src=watchlist  pat=exhaustion(+1b)  entry=12.3500  exit=11.7325  pnl=-5.00%  bars=1  support_ok=False  cum=+20.04%
+2026-04-23 20:28:30    [WIN    ] ANNA   attempt=4  src=computed  pat=strict(+12b)  entry=4.1220  exit=4.2182  pnl=+2.33%  bars=1  support_ok=False  cum=+22.84%
+2026-04-23 20:28:30    [WIN    ] ANNA   attempt=5  src=computed  pat=strict(+16b)  entry=4.0700  exit=4.2182  pnl=+3.64%  bars=1  support_ok=False  cum=+27.31%
+2026-04-23 20:28:30    [WIN    ] PAPL   attempt=8  src=computed  pat=exhaustion(+7b)  entry=0.7951  exit=0.8701  pnl=+9.44%  bars=1  support_ok=False  cum=+39.33%
+2026-04-23 20:28:30    [WIN    ] ANNA   attempt=6  src=computed  pat=strict(+20b)  entry=4.0499  exit=4.2182  pnl=+4.16%  bars=1  support_ok=False  cum=+45.12%
+2026-04-23 20:28:30    [WIN    ] AKAN   attempt=5  src=watchlist  pat=exhaustion(+0b)  entry=12.9501  exit=13.0469  pnl=+0.75%  bars=5  support_ok=True  cum=+46.20%
+2026-04-23 20:28:30    [WIN    ] PAPL   attempt=9  src=computed  pat=exhaustion(+11b)  entry=0.8488  exit=0.8701  pnl=+2.51%  bars=1  support_ok=False  cum=+49.88%
+2026-04-23 20:28:30    [WIN    ] AKAN   attempt=6  src=watchlist  pat=exhaustion(+2b)  entry=12.8200  exit=13.0469  pnl=+1.77%  bars=1  support_ok=False  cum=+52.53%
+2026-04-23 20:28:30    [LOSS   ] AKAN   attempt=7  src=watchlist  pat=exhaustion(+6b)  entry=12.9000  exit=12.0900  pnl=-6.28%  bars=1  support_ok=False  cum=+42.95%
+2026-04-23 20:28:30    [WIN    ] RPGL   attempt=2  src=computed  pat=exhaustion(+4b)  entry=0.8757  exit=0.9000  pnl=+2.77%  bars=1  support_ok=True  cum=+46.92%
+2026-04-23 20:28:30    [LOSS   ] ANNA   attempt=7  src=computed  pat=exhaustion(+0b)  entry=4.4000  exit=4.3560  pnl=-1.00%  bars=1  support_ok=True  cum=+45.45%
+2026-04-23 20:28:30    [TIMEOUT] ANNA   attempt=8  src=computed  pat=exhaustion(+3b)  entry=4.3232  exit=4.3500  pnl=+0.62%  bars=16  support_ok=True  cum=+46.35%
+2026-04-23 20:28:30    [TIMEOUT] RPGL   attempt=3  src=computed  pat=exhaustion(+0b)  entry=0.8525  exit=0.8772  pnl=+2.90%  bars=3  support_ok=True  cum=+50.59%
+2026-04-23 20:28:30  [simulator] END — 28 trades / 12 entries (0 skipped/deduped, 0 filtered)  cum_pnl=+50.59%  spy_bh=N/A  (2026-04-23 → 2026-04-24)
+2026-04-23 20:28:30  [simulator] Log written → /usr/local/google/home/marcoscarlata/strat/Strategy-Arena/side_by_side_backtest/logs/simulation.log

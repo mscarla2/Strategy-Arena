@@ -161,7 +161,24 @@ def _load_bars(entry, fetch: bool):
     return bars
 
 
-def _print_trades(trades: list, trade_size: float, budget: float) -> None:
+def _get_vol_constrained_shares(t, base_shares: float, bars: Optional[pd.DataFrame], rate=0.02) -> float:
+    if bars is None or bars.empty:
+        return base_shares
+    try:
+        tod_str = t.entry_ts.strftime("%H:%M")
+        tod_mask = bars.index.strftime("%H:%M") == tod_str
+        tod_bars = bars[tod_mask]
+        if tod_bars.empty:
+            return base_shares
+        median_vol = float(tod_bars["volume"].median())
+        if median_vol <= 0:
+            return base_shares
+        max_shares = median_vol * rate
+        return min(base_shares, max_shares)
+    except Exception:
+        return base_shares
+
+def _print_trades(trades: list, trade_size: float, budget: float, bars_map: dict, size_mode: str = "flat") -> None:
     """Print per-trade table + running equity + summary."""
     W = 110
     print(f"\n{_BOLD}{'─'*W}{_RST}")
@@ -173,7 +190,16 @@ def _print_trades(trades: list, trade_size: float, budget: float) -> None:
 
     equity = budget
     for t in trades:
-        shares     = trade_size / t.entry_price if t.entry_price else 0
+        if size_mode == "atr" and getattr(t, "atr", 0.0) > 0:
+            stop_dist = t.atr * 1.5
+            shares = trade_size / stop_dist if stop_dist > 0 else 0
+        else:
+            shares     = trade_size / t.entry_price if t.entry_price else 0
+            
+        # Phase 2: Volume Constraints (Liquidity Gate)
+        ticker_bars = bars_map.get(t.ticker)
+        shares = _get_vol_constrained_shares(t, shares, ticker_bars, rate=0.02)
+        
         dollar_pnl = shares * (t.exit_price - t.entry_price)
         equity    += dollar_pnl
         ts_str     = str(t.entry_ts)[:16] if t.entry_ts else "—"
@@ -286,8 +312,12 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
                 rescore_stride=1,
                 disable_sr_cache=False,
                 use_atr=args.use_atr,
+                tp_atr_mult=3.0,
+                sl_atr_mult=1.5,
                 target_date=sim_date,
             )
+            if args.require_support_ok:
+                day_trades = [t for t in day_trades if t.support_respected]
             all_trades.extend(day_trades)
     else:
         # SBS per-day: entries and support levels are date-specific
@@ -314,7 +344,7 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
                 profit_target_pct=args.tp,
                 stop_loss_pct=args.sl,
                 max_entry_attempts=10,
-                require_support_ok=True,
+                require_support_ok=args.require_support_ok,
                 verbose=False,
                 use_atr=args.use_atr,
             )
@@ -348,8 +378,22 @@ def _run_all(args, posts: list[dict], do_fetch: bool, max_conc: int) -> None:
         wins    = sum(1 for t in day_trades if t.outcome == "win")
         losses  = sum(1 for t in day_trades if t.outcome == "loss")
         wr      = wins / len(day_trades)
-        day_pnl = sum((args.size / t.entry_price) * (t.exit_price - t.entry_price)
-                      for t in day_trades if t.entry_price)
+        
+        # Phase 1 & 2 sizing (ATR + Volume Cap)
+        day_pnl = 0.0
+        for t in day_trades:
+            if not t.entry_price:
+                continue
+            if args.size_mode == "atr":
+                stop_dist = t.atr * 1.5 if getattr(t, "atr", 0.0) > 0 else t.entry_price * 0.02
+                base_shares = args.risk_budget / stop_dist if stop_dist > 0 else 0
+            else:
+                base_shares = args.size / t.entry_price
+                
+            t_bars = bars_map.get(t.ticker)
+            shares = _get_vol_constrained_shares(t, base_shares, t_bars, rate=0.02)
+            day_pnl += shares * (t.exit_price - t.entry_price)
+            
         cumulative_equity += day_pnl
         grand_trades += len(day_trades)
         grand_wins   += wins
@@ -381,8 +425,8 @@ def main() -> None:
                     help="card = score-based entry; sbs = support-touch + pattern (default: card)")
     ap.add_argument("--min",      type=float, default=4.3,
                     help="[card] Min score to enter (default 4.3)")
-    ap.add_argument("--tp",       type=float, default=5.0,
-                    help="[sbs] Take-profit %% (default 5.0)")
+    ap.add_argument("--tp",       type=float, default=3.75,
+                    help="[sbs] Take-profit %% (default 3.75)")
     ap.add_argument("--sl",       type=float, default=1.0,
                     help="[sbs] Stop-loss %% (default 1.0)")
     ap.add_argument("--session",  default="unknown",
@@ -404,6 +448,12 @@ def main() -> None:
                     help="Run simulation for every post date in the JSON")
     ap.add_argument("--use-atr", action="store_true",
                     help="Use ATR-based TP/SL instead of percentages/card levels")
+    ap.add_argument("--no-support-ok", action="store_false", dest="require_support_ok",
+                    help="Disable support_ok safety gate")
+    ap.add_argument("--size-mode", choices=["flat", "atr"], default="flat",
+                    help="Sizing mode: flat dollar or ATR risk-based (default: flat)")
+    ap.add_argument("--risk-budget", type=float, default=10.0,
+                    help="Risk budget per trade if --size-mode is atr (default $10)")
     args = ap.parse_args()
 
     target_date: date | None = None
@@ -486,12 +536,26 @@ def main() -> None:
 
     def _summarise(trades: list, label: str) -> None:
         trades.sort(key=lambda t: t.entry_ts)
-        _print_trades(trades, args.size, args.budget)
+        size_to_pass = args.risk_budget if args.size_mode == "atr" else args.size
+        _print_trades(trades, size_to_pass, args.budget, bars_map, size_mode=args.size_mode)
         wins      = sum(1 for t in trades if t.outcome == "win")
         losses    = sum(1 for t in trades if t.outcome == "loss")
         wr        = wins / len(trades) if trades else 0
-        total_pnl = sum((args.size / t.entry_price) * (t.exit_price - t.entry_price)
-                        for t in trades if t.entry_price)
+        
+        # Phase 1 & 2 sizing (ATR + Volume Cap)
+        total_pnl = 0.0
+        for t in trades:
+            if not t.entry_price:
+                continue
+            if args.size_mode == "atr":
+                stop_dist = t.atr * 1.5 if getattr(t, "atr", 0.0) > 0 else t.entry_price * 0.02
+                base_shares = args.risk_budget / stop_dist if stop_dist > 0 else 0
+            else:
+                base_shares = args.size / t.entry_price
+                
+            t_bars = bars_map.get(t.ticker)
+            shares = _get_vol_constrained_shares(t, base_shares, t_bars, rate=0.02)
+            total_pnl += shares * (t.exit_price - t.entry_price)
         print(
             f"\n  {_BOLD}[{label}] Trades:{_RST} {len(trades)}  "
             f"{_BOLD}Wins:{_RST} {wins}  {_BOLD}Losses:{_RST} {losses}  "
@@ -518,8 +582,12 @@ def main() -> None:
             rescore_stride=1,
             disable_sr_cache=False,
             use_atr=args.use_atr,
+            tp_atr_mult=3.0,
+            sl_atr_mult=1.5,
             target_date=sim_date,
         )
+        if args.require_support_ok:
+            all_trades = [t for t in all_trades if t.support_respected]
         trades = [t for t in all_trades if _trade_date(t) == sim_date]
         if not trades:
             msg = (f"No trades fired at score ≥ {args.min}" if not all_trades
@@ -539,7 +607,7 @@ def main() -> None:
             profit_target_pct=args.tp,
             stop_loss_pct=args.sl,
             max_entry_attempts=10,
-            require_support_ok=True,
+            require_support_ok=args.require_support_ok,
             verbose=True,
             use_atr=args.use_atr,
         )

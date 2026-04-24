@@ -89,6 +89,7 @@ class SetupScore:
     support_broken:   bool  = False   # current price is below the watchlist support level
     support_ok:       bool  = True    # recent closes hold above support (aligns with simulator gate)
     watchlist_note:   str   = ""      # original text from the post
+    atr:              float = 0.0     # ATR at entry for sizing
 
     # EQH (Equal Highs / Liquidity Ceiling) fields
     eqh_level:        float = 0.0    # EQH ceiling price (0.0 if none found)
@@ -783,6 +784,11 @@ def score_setup(
 
     current_price = float(bars["close"].iloc[-1]) if not bars.empty else 0.0
 
+    # Calculate ATR for position sizing (Phase 6)
+    from .pattern_engine import _atr
+    atr_series = _atr(bars, period=14)
+    current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
+
     def _is_stale(level: Optional[float], price: float, threshold: float = 0.30) -> bool:
         """Return True if level is absent or >threshold% away from current price."""
         if not level or level <= 0 or price <= 0:
@@ -990,6 +996,7 @@ def score_setup(
         sr_levels=sr,
         entry_price=round(entry_price, 4),
         support=round(support, 4) if support else 0.0,
+        atr=current_atr,
         resistance=round(resistance, 4) if resistance else None,
         stop=round(stop_price, 4),
         rr_ratio=rr_ratio,

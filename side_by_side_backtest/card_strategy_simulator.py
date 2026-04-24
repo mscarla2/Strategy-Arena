@@ -160,11 +160,8 @@ def _score_all_sessions(
         bars = bars.copy()
         bars.index = bars.index.tz_convert("UTC")
 
-    if use_atr:
-        from .pattern_engine import _atr
-        atr_series = _atr(bars, period=14)
-    else:
-        atr_series = pd.Series()
+    from .pattern_engine import _atr
+    atr_series = _atr(bars, period=14)
 
     # ── Find all unique calendar dates present in the bars ───────────────────
     # We iterate every date in the full 30-day window.  For each date we:
@@ -312,46 +309,39 @@ def _score_all_sessions(
             # For first entries: always get a TP (5% fallback if S/R absent).
             # For re-entries: skip if no real resistance level found.
             # Resolve ATR for this bar
-            if use_atr and not atr_series.empty:
-                try:
-                    current_atr = float(atr_series.loc[bar_ts])
-                except KeyError:
-                    current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
-            else:
-                current_atr = 0.0
+            # Always resolve current_atr for position sizing (Phase 1)
+            try:
+                current_atr = float(atr_series.loc[bar_ts])
+            except KeyError:
+                current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
 
-            tp_price = sc.resistance if (sc.resistance and sc.resistance > entry_price) else None
-            if tp_price is None and _day_sr is not None:
-                tp_candidate = _day_sr.nearest_resistance(entry_price)
-                if tp_candidate and tp_candidate > entry_price:
-                    tp_price = tp_candidate
-            if tp_price is None:
-                if is_reentry:
-                    logger.debug(
-                        "[card_sim] SKIP no-real-tp (reentry): %s %s bar%d entry=%.4f",
-                        entry.ticker, trading_date, bar_idx, entry_price,
-                    )
-                    continue
-                else:
-                    if use_atr and current_atr > 0:
-                        tp_price = entry_price + current_atr * tp_atr_mult
+            if use_atr and current_atr > 0:
+                tp_price = entry_price + current_atr * tp_atr_mult
+                sl_price = entry_price - current_atr * sl_atr_mult
+            else:
+                tp_price = sc.resistance if (sc.resistance and sc.resistance > entry_price) else None
+                if tp_price is None and _day_sr is not None:
+                    tp_candidate = _day_sr.nearest_resistance(entry_price)
+                    if tp_candidate and tp_candidate > entry_price:
+                        tp_price = tp_candidate
+                if tp_price is None:
+                    if is_reentry:
+                        logger.debug(
+                            "[card_sim] SKIP no-real-tp (reentry): %s %s bar%d entry=%.4f",
+                            entry.ticker, trading_date, bar_idx, entry_price,
+                        )
+                        continue
                     else:
                         tp_price = entry_price * (1.0 + _DEFAULT_TP_PCT)
 
-            # ── SL: card stop → cached day support − 2.5% SL-hunt buffer ─────
-            # Use cached _day_sr (fast) rather than recomputing per bar.
-            sl_price = sc.stop if (sc.stop and sc.stop < entry_price) else None
-            if is_reentry or sl_price is None:
-                computed_support = _day_sr.nearest_support(entry_price) if _day_sr else None
-                if computed_support and 0 < computed_support < entry_price:
-                    if use_atr and current_atr > 0:
-                        sl_price = entry_price - current_atr * sl_atr_mult
-                    else:
+                # ── SL: card stop → cached day support − 2.5% SL-hunt buffer ─────
+                # Use cached _day_sr (fast) rather than recomputing per bar.
+                sl_price = sc.stop if (sc.stop and sc.stop < entry_price) else None
+                if is_reentry or sl_price is None:
+                    computed_support = _day_sr.nearest_support(entry_price) if _day_sr else None
+                    if computed_support and 0 < computed_support < entry_price:
                         sl_price = computed_support * (1.0 - 0.025)
-                    sl_price = max(sl_price, entry_price * 0.95)
-                else:
-                    if use_atr and current_atr > 0:
-                        sl_price = entry_price - current_atr * sl_atr_mult
+                        sl_price = max(sl_price, entry_price * 0.95)
                     else:
                         default_pct = 0.03 if is_reentry else _DEFAULT_SL_PCT
                         sl_price = entry_price * (1.0 - default_pct)
@@ -360,7 +350,7 @@ def _score_all_sessions(
                 # Tighten stop to max 2% on choppy days
                 sl_price = max(sl_price, entry_price * 0.98)
 
-            results.append((sc.score, entry_price, tp_price, sl_price, entry_ts_, sc.sr_levels, regime))
+            results.append((sc.score, entry_price, tp_price, sl_price, entry_ts_, sc.sr_levels, regime, current_atr))
 
     return results
 
@@ -384,6 +374,7 @@ def _simulate_from_entry(
     entry_ts: pd.Timestamp,
     sr_levels: Optional[SRLevels] = None,
     regime: str = "trending",
+    atr: float = 0.0,
 ) -> TradeResult:
     """
     Simulate exit from a confirmed entry using the card's own TP/SL dollar levels.
@@ -444,6 +435,7 @@ def _simulate_from_entry(
             pattern_type="card_strategy",
             bars_since_pattern=0,
             entry_attempt=1,
+            atr=atr,
         )
 
     # Vectorised date filter.
@@ -481,6 +473,7 @@ def _simulate_from_entry(
             pattern_type="card_strategy",
             bars_since_pattern=0,
             entry_attempt=1,
+            atr=atr,
         )
 
     highest_high = entry_price
@@ -516,7 +509,7 @@ def _simulate_from_entry(
                 return _mk_result(ts, trail_stop, "win", i + 1)
 
         if low <= sl_price:
-            raw_fill   = min(sl_price, low)
+            raw_fill   = min(sl_price, open)
             fill_price = raw_fill * (1.0 - _SL_SLIPPAGE_PCT)
             return _mk_result(ts, fill_price, "loss", i + 1)
 
@@ -563,6 +556,7 @@ def _simulate_from_entry(
         pattern_type="card_strategy",
         bars_since_pattern=0,
         entry_attempt=1,
+        atr=atr,
     )
 
 
@@ -576,7 +570,7 @@ def _score_ticker_top(
     tp_atr_mult: float,
     sl_atr_mult: float,
     target_date: Optional[date] = None,
-) -> List[Tuple[WatchlistEntry, float, float, float, float, pd.Timestamp, Optional[SRLevels], str]]:
+) -> List[Tuple[WatchlistEntry, float, float, float, float, pd.Timestamp, Optional[SRLevels], str, float]]:
     if bars is None or bars.empty:
         return []
     sessions = _score_all_sessions(entry, bars, min_score,
@@ -586,7 +580,7 @@ def _score_ticker_top(
                                    tp_atr_mult=tp_atr_mult,
                                    sl_atr_mult=sl_atr_mult,
                                    target_date=target_date)
-    return [(entry, sc, ep, tp, sl, ets, srl, reg) for sc, ep, tp, sl, ets, srl, reg in sessions]
+    return [(entry, sc, ep, tp, sl, ets, srl, reg, atr) for sc, ep, tp, sl, ets, srl, reg, atr in sessions]
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +701,7 @@ def simulate_card_strategy(
         banned_same_day: dict = {}        # {(ticker, date): True} — tickers banned after a loss
 
         _dbg_n = 0   # count candidates examined for first-pass debug
-        for entry, score, ep, tp, sl, ets, sr_levels, regime in all_candidates:
+        for entry, score, ep, tp, sl, ets, sr_levels, regime, atr in all_candidates:
             dedup_key = (entry.ticker, str(ets))
             if dedup_key in seen_dedup:
                 continue
@@ -794,7 +788,7 @@ def simulate_card_strategy(
 
             # ── Simulate exit ─────────────────────────────────────────────────
             try:
-                trade = _simulate_from_entry(entry, bars, ep, tp, sl, ets, sr_levels, regime)
+                trade = _simulate_from_entry(entry, bars, ep, tp, sl, ets, sr_levels, regime, atr)
             except Exception as exc:
                 logger.warning("[card_sim] SKIP exit-error %s ets=%s: %s",
                                 entry.ticker, ets, exc)

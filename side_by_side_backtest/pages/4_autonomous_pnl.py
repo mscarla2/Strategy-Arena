@@ -617,8 +617,33 @@ def _render_live_panel(json_path: str) -> None:
                     last = float(bars["close"].iloc[-1]) if not bars.empty else 0.0
             except Exception:
                 last = 0.0
+            # Phase 2 & 6 UI: Calculate TOD Cap
+            from side_by_side_backtest.smart_execution import VolumeLiquidityGate
+            
+            t_bars = bars_map.get(ticker)
+            vol_matrix = {}
+            if t_bars is not None and not t_bars.empty:
+                profile = {}
+                for ts_idx, row_idx in t_bars.iterrows():
+                    bucket = ts_idx.strftime("%H:%M")
+                    if bucket not in profile:
+                        profile[bucket] = []
+                    profile[bucket].append(float(row_idx["volume"]))
+                vol_matrix[ticker] = profile
+            
+            str_cfg = monitor._strategy_cfg(r.get("strategy_name", "backtest_strategy"))
+            p_rate = getattr(str_cfg, "liquidity_participation", 0.02)
+            
+            gate = VolumeLiquidityGate(vol_matrix, participation_rate=p_rate)
+            tod_cap = gate.get_max_trade_size(ticker, datetime.now())
+            tod_cap = int(tod_cap) if tod_cap > 0 else 0
+
             unreal     = (last - entry_price) * qty if last and entry_price else 0.0
             unreal_pct = (last - entry_price) / entry_price * 100 if entry_price else 0.0
+            
+            # OCO Bracket Status (Mock for paper, live would query broker)
+            oco_id = "paper-oco-" + ticker if CONFIG.paper_mode else (r.get("order_id") or "Active")
+            
             pos_rows.append({
                 "Ticker":     ticker,
                 "Strategy":   _STRATEGY_STYLE.get(r.get("strategy_name", ""), (r.get("strategy_name", ""), ""))[0],
@@ -627,6 +652,9 @@ def _render_live_panel(json_path: str) -> None:
                 "Unreal $":   f"${unreal:+.2f}",
                 "Unreal %":   f"{unreal_pct:+.2f}%",
                 "Qty":        qty,
+                "TOD Cap":    f"{tod_cap:,} sh" if tod_cap > 0 else "—",
+                "OCO Status": oco_id,
+                "ATR Entry":  f"${r.get('atr', 0.0):.3f}" if r.get('atr') else "—",
                 "PT%":        r.get("pt_pct", "—"),
                 "SL%":        r.get("sl_pct", "—"),
                 "Score":      r.get("setup_score", "—"),

@@ -116,6 +116,20 @@ class SchwabBroker:
             logger.error(f"[schwab] place_order failed: {exc}")
             return OrderResult(order_id=None, status="error", message=str(exc))
 
+    def place_oco(self, ticker: str, quantity: int, tp_price: float, sl_price: float) -> OrderResult:
+        """
+        Place an OCO (One Cancels Other) bracket order for Take-Profit and Stop-Loss.
+        Stubbed for Paper Mode.
+        """
+        if self._cfg.paper_mode:
+            msg = f"[PAPER] OCO Bracket placed for {quantity}×{ticker}: TP=${tp_price:.4f}, SL=${sl_price:.4f}"
+            logger.info(msg)
+            print(msg)
+            import uuid
+            return OrderResult(order_id=f"oco-{uuid.uuid4().hex[:8]}", status="paper", message=msg)
+
+        raise NotImplementedError("Live OCO brackets not yet implemented in SchwabBroker")
+
     def get_order_status(self, order_id: str) -> OrderResult:
         """Poll order status. Returns 'filled' | 'pending' | 'cancelled'."""
         if self._cfg.paper_mode:
